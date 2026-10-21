@@ -436,7 +436,7 @@ static NSMutableSet* hostList;
 }
 
 - (UIViewController*) activeViewController {
-    UIViewController *topController = [UIApplication sharedApplication].keyWindow.rootViewController;
+    UIViewController *topController = [Utils keyWindow].rootViewController;
 
     while (topController.presentedViewController) {
         topController = topController.presentedViewController;
@@ -1293,7 +1293,7 @@ static NSMutableSet* hostList;
     
     CGColorSpaceRef colorSpace = CGColorSpaceCreateDeviceRGB();
     CGContextRef imageContext =  CGBitmapContextCreate(NULL, width, height, 8, width * 4, colorSpace,
-                                                       kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Little);
+                                                       (CGBitmapInfo)kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Little);
     CGColorSpaceRelease(colorSpace);
 
     CGContextDrawImage(imageContext, CGRectMake(0, 0, width, height), cgImage);
@@ -1407,10 +1407,6 @@ static NSMutableSet* hostList;
 }
 
 #if !TARGET_OS_TV
-- (BOOL)shouldAutorotate {
-    return YES;
-}
-
 - (UIInterfaceOrientationMask)supportedInterfaceOrientations {
     // On iPhone, only the touchpad screen of an external display stream
     // works in portrait

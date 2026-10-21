@@ -22,6 +22,11 @@ typedef NS_ENUM(int, State) {
 
 FOUNDATION_EXPORT NSString *const deviceName;
 
+// User defaults key for the "Full" resolution setting's scale (1.0 is the
+// display's own resolution). Zero or missing means a fixed resolution from
+// settings is used instead of following the display.
+FOUNDATION_EXPORT NSString *const matchDisplayScaleKey;
+
 + (NSData*) randomBytes:(NSInteger)length;
 + (NSString*) bytesToHex:(NSData*)data;
 + (NSData*) hexToBytes:(NSString*) hex;
@@ -37,6 +42,18 @@ FOUNDATION_EXPORT NSString *const deviceName;
 // in a window yet. Use this instead of [UIScreen mainScreen], which
 // doesn't describe the active display on devices with more than one.
 + (UIScreen*) screenForView:(UIView*)view;
+
+// Returns the key window of our app's foreground window scene, or that
+// scene's first window if none is key. Use this instead of
+// [UIApplication keyWindow], which looks across every scene, including
+// the one for an external display.
++ (UIWindow*) keyWindow;
+
+// Returns a stream resolution with the same shape as a display of the given
+// size in pixels, scaled down by the given factor. Both sides are multiples
+// of 8 for the host's encoder, and the size is picked so that fitting the
+// video to the display leaves less than a pixel of black bars.
++ (CGSize) streamSizeForDisplaySize:(CGSize)displaySize scale:(double)scale;
 
 #if !TARGET_OS_TV
 + (void) launchUrl:(NSString*)urlString;

@@ -17,6 +17,8 @@
 @implementation SettingsViewController {
     NSInteger _bitrate;
     NSInteger _lastSelectedResolutionIndex;
+    double _fullScreenScale;
+    CGSize _fullScreenSize;
 }
 
 @dynamic overrideUserInterfaceStyle;
@@ -51,8 +53,9 @@ static const int bitrateTable[] = {
     150000,
 };
 
-const int RESOLUTION_TABLE_SIZE = 7;
-const int RESOLUTION_TABLE_CUSTOM_INDEX = RESOLUTION_TABLE_SIZE - 1;
+#define RESOLUTION_TABLE_SIZE 7
+#define RESOLUTION_TABLE_CUSTOM_INDEX (RESOLUTION_TABLE_SIZE - 1)
+#define RESOLUTION_TABLE_FULL_INDEX 5
 CGSize resolutionTable[RESOLUTION_TABLE_SIZE];
 
 -(int)getSliderValueForBitrate:(NSInteger)bitrate {
@@ -142,7 +145,7 @@ BOOL isCustomResolution(CGSize res) {
     _bitrate = bitrateTable[[self getSliderValueForBitrate:[currentSettings.bitrate intValue]]];
 
     // Get the size of the screen with and without safe area insets
-    UIWindow *window = UIApplication.sharedApplication.windows.firstObject;
+    UIWindow *window = [Utils keyWindow];
     CGFloat screenScale = window.screen.scale;
     CGFloat safeAreaWidth = (window.frame.size.width - window.safeAreaInsets.left - window.safeAreaInsets.right) * screenScale;
     CGFloat fullScreenWidth = window.frame.size.width * screenScale;
@@ -158,11 +161,17 @@ BOOL isCustomResolution(CGSize res) {
     resolutionTable[2] = CGSizeMake(1920, 1080);
     resolutionTable[3] = CGSizeMake(3840, 2160);
     resolutionTable[4] = CGSizeMake(safeAreaWidth, fullScreenHeight);
-    resolutionTable[5] = CGSizeMake(fullScreenWidth, fullScreenHeight);
+    // "Full" follows the display while streaming, at a scale that can be
+    // turned down for a lighter stream that still fills the screen
+    double savedScale = [[NSUserDefaults standardUserDefaults] doubleForKey:matchDisplayScaleKey];
+    _fullScreenScale = savedScale > 0 ? MIN(1.0, savedScale) : 1.0;
+    _fullScreenSize = CGSizeMake(fullScreenWidth, fullScreenHeight);
+    resolutionTable[RESOLUTION_TABLE_FULL_INDEX] = [self fullScreenResolution];
     resolutionTable[6] = CGSizeMake([currentSettings.width integerValue], [currentSettings.height integerValue]); // custom initial value
     
     // Don't populate the custom entry unless we have a custom resolution
-    if (!isCustomResolution(resolutionTable[6])) {
+    if (savedScale > 0 || !isCustomResolution(resolutionTable[6]) ||
+        CGSizeEqualToSize(resolutionTable[6], CGSizeMake((int)fullScreenWidth, (int)fullScreenHeight))) {
         resolutionTable[6] = CGSizeMake(0, 0);
     }
     
@@ -181,11 +190,23 @@ BOOL isCustomResolution(CGSize res) {
     }
 
     NSInteger resolution = 1;
-    for (int i = 0; i < RESOLUTION_TABLE_SIZE; i++) {
-        if ((int) resolutionTable[i].height == [currentSettings.height intValue]
-            && (int) resolutionTable[i].width == [currentSettings.width intValue]) {
-            resolution = i;
-            break;
+    if (savedScale > 0) {
+        // The saved size may be from the other display if we folded or
+        // unfolded since then
+        resolution = RESOLUTION_TABLE_FULL_INDEX;
+    }
+    else {
+        for (int i = 0; i < RESOLUTION_TABLE_SIZE; i++) {
+            if ((int) resolutionTable[i].height == [currentSettings.height intValue]
+                && (int) resolutionTable[i].width == [currentSettings.width intValue]) {
+                resolution = i;
+                break;
+            }
+        }
+        
+        // Before "Full" could be scaled, it saved the display's exact size
+        if ([currentSettings.width intValue] == (int)fullScreenWidth && [currentSettings.height intValue] == (int)fullScreenHeight) {
+            resolution = RESOLUTION_TABLE_FULL_INDEX;
         }
     }
 
@@ -333,10 +354,17 @@ BOOL isCustomResolution(CGSize res) {
     [self updateBitrateText];
 }
 
+- (CGSize) fullScreenResolution {
+    return [Utils streamSizeForDisplaySize:_fullScreenSize scale:_fullScreenScale];
+}
+
 - (void) newResolutionChosen {
     BOOL lastSegmentSelected = [self.resolutionSelector selectedSegmentIndex] + 1 == [self.resolutionSelector numberOfSegments];
     if (lastSegmentSelected) {
         [self promptCustomResolutionDialog];
+    }
+    else if ([self.resolutionSelector selectedSegmentIndex] == RESOLUTION_TABLE_FULL_INDEX) {
+        [self promptFullScreenScaleDialog];
     }
     else {
         [self updateBitrate];
@@ -424,7 +452,45 @@ BOOL isCustomResolution(CGSize res) {
     [self presentViewController:alertController animated:YES completion:nil];
 }
 
+- (void) promptFullScreenScaleDialog {
+    UIAlertController *alertController = [UIAlertController alertControllerWithTitle:@"Full Screen Resolution"
+                                                                             message:@"Lower resolutions keep the shape of your screen, so the stream still fills it. They follow the screen you're using when you fold or unfold."
+                                                                      preferredStyle:UIAlertControllerStyleActionSheet];
+    
+    const double scales[] = { 1.0, 0.75, 0.67, 0.5 };
+    for (int i = 0; i < sizeof(scales) / sizeof(*scales); i++) {
+        double scale = scales[i];
+        CGSize size = [Utils streamSizeForDisplaySize:_fullScreenSize scale:scale];
+        NSString *title = [NSString stringWithFormat:@"%@%d%% (%d x %d)",
+                           fabs(scale - _fullScreenScale) < 0.001 ? @"✓ " : @"",
+                           (int)round(scale * 100), (int)size.width, (int)size.height];
+        [alertController addAction:[UIAlertAction actionWithTitle:title style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
+            self->_fullScreenScale = scale;
+            resolutionTable[RESOLUTION_TABLE_FULL_INDEX] = [self fullScreenResolution];
+            [self.resolutionSelector setSelectedSegmentIndex:RESOLUTION_TABLE_FULL_INDEX];
+            [self updateBitrate];
+            [self updateResolutionDisplayViewText];
+            self->_lastSelectedResolutionIndex = RESOLUTION_TABLE_FULL_INDEX;
+        }]];
+    }
+    [alertController addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:^(UIAlertAction * _Nonnull action) {
+        [self.resolutionSelector setSelectedSegmentIndex:self->_lastSelectedResolutionIndex];
+    }]];
+    
+    // Action sheets are popovers on iPad
+    alertController.popoverPresentationController.sourceView = self.resolutionSelector;
+    alertController.popoverPresentationController.sourceRect = self.resolutionSelector.bounds;
+    
+    [self presentViewController:alertController animated:YES completion:nil];
+}
+
 - (void)resolutionDisplayViewTapped:(UITapGestureRecognizer *)sender {
+    // Tapping the resolution while on "Full" changes its scale
+    if ([self.resolutionSelector selectedSegmentIndex] == RESOLUTION_TABLE_FULL_INDEX) {
+        [self promptFullScreenScaleDialog];
+        return;
+    }
+    
     NSURL *url = [NSURL URLWithString:@"https://moonlight-stream.org/custom-resolution"];
     if ([[UIApplication sharedApplication] canOpenURL:url]) {
         [[UIApplication sharedApplication] openURL:url options:@{} completionHandler:nil];
@@ -443,7 +509,12 @@ BOOL isCustomResolution(CGSize res) {
         [subview removeFromSuperview];
     }
     UILabel *label1 = [[UILabel alloc] init];
-    label1.text = @"Set PC/Game resolution: ";
+    if ([self.resolutionSelector selectedSegmentIndex] == RESOLUTION_TABLE_FULL_INDEX) {
+        label1.text = [NSString stringWithFormat:@"Full screen at %d%% (tap to change): ", (int)round(_fullScreenScale * 100)];
+    }
+    else {
+        label1.text = @"Set PC/Game resolution: ";
+    }
     label1.font = [UIFont systemFontOfSize:fontSize];
     [label1 sizeToFit];
     label1.frame = CGRectMake(padding, (viewFrameHeight - label1.frame.size.height) / 2, label1.frame.size.width, label1.frame.size.height);
@@ -539,6 +610,11 @@ BOOL isCustomResolution(CGSize res) {
     BOOL absoluteTouchMode = [self.touchModeSelector selectedSegmentIndex] == 1;
     BOOL statsOverlay = [self.statsOverlaySelector selectedSegmentIndex] == 1;
     BOOL enableHdr = [self.hdrSelector selectedSegmentIndex] == 1;
+    
+    // Remember whether the stream should follow the display, and at what scale
+    BOOL fullScreen = [self.resolutionSelector selectedSegmentIndex] == RESOLUTION_TABLE_FULL_INDEX;
+    [[NSUserDefaults standardUserDefaults] setDouble:fullScreen ? _fullScreenScale : 0 forKey:matchDisplayScaleKey];
+    
     [dataMan saveSettingsWithBitrate:_bitrate
                            framerate:framerate
                               height:height

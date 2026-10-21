@@ -111,10 +111,11 @@
     _spinner = [[UIActivityIndicatorView alloc] init];
     [_spinner setUserInteractionEnabled:NO];
 #if TARGET_OS_TV
-    [_spinner setActivityIndicatorViewStyle:UIActivityIndicatorViewStyleWhiteLarge];
+    [_spinner setActivityIndicatorViewStyle:UIActivityIndicatorViewStyleLarge];
 #else
-    [_spinner setActivityIndicatorViewStyle:UIActivityIndicatorViewStyleWhite];
+    [_spinner setActivityIndicatorViewStyle:UIActivityIndicatorViewStyleMedium];
 #endif
+    [_spinner setColor:[UIColor whiteColor]];
     [_spinner sizeToFit];
     [_spinner startAnimating];
     _spinner.center = CGPointMake(self.view.frame.size.width / 2, self.view.frame.size.height / 2 - _stageLabel.frame.size.height - _spinner.frame.size.height);
@@ -262,8 +263,10 @@
         return;
     }
     
-    if (_externalWindow != nil) {
-        // Use the display's resolution instead of the one in settings
+    // Use the display's resolution instead of the one in settings when
+    // streaming to an external display, or when settings ask to follow
+    // our own display (which may have folded or unfolded since then)
+    if (_externalWindow != nil || [self matchDisplayScale] > 0) {
         CGSize resolution = [self streamResolutionForCurrentDisplay];
         self.streamConfig.width = (int)resolution.width;
         self.streamConfig.height = (int)resolution.height;
@@ -351,8 +354,16 @@
     [self performSelector:@selector(restartStreamIfResolutionChanged) withObject:nil afterDelay:0.5];
 }
 
+// The "Full" resolution's scale from settings, or 0 if a fixed resolution
+// was chosen instead
+- (double)matchDisplayScale
+{
+    return MIN(1.0, [[NSUserDefaults standardUserDefaults] doubleForKey:matchDisplayScaleKey]);
+}
+
 // Picks a stream resolution with the same aspect ratio as the display the
-// video is shown on (our view, or the external display), using no more
+// video is shown on (our view, or the external display). On our own display
+// this is the scale chosen with the "Full" setting. Otherwise it uses no more
 // pixels than the resolution chosen in settings.
 - (CGSize)streamResolutionForCurrentDisplay
 {
@@ -383,13 +394,13 @@
         return CGSizeMake(self.streamConfig.width, self.streamConfig.height);
     }
     
-    double maxPixels = [_settings.width doubleValue] * [_settings.height doubleValue];
-    double factor = MIN(1.0, sqrt(maxPixels / (viewWidth * viewHeight)));
+    double factor = [self matchDisplayScale];
+    if (_externalWindow != nil || factor <= 0) {
+        double maxPixels = [_settings.width doubleValue] * [_settings.height doubleValue];
+        factor = MIN(1.0, sqrt(maxPixels / (viewWidth * viewHeight)));
+    }
     
-    // Encoders want dimensions that are a multiple of 8
-    int width = MAX(8, (int)(viewWidth * factor) & ~7);
-    int height = MAX(8, (int)(viewHeight * factor) & ~7);
-    return CGSizeMake(width, height);
+    return [Utils streamSizeForDisplaySize:CGSizeMake(viewWidth, viewHeight) scale:factor];
 }
 
 - (void)restartStreamIfResolutionChanged
@@ -1136,10 +1147,6 @@
     }
     
     return NO;
-}
-
-- (BOOL)shouldAutorotate {
-    return YES;
 }
 
 - (UIInterfaceOrientationMask)supportedInterfaceOrientations {

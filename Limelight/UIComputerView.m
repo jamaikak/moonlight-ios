@@ -33,7 +33,7 @@ static const int LABEL_DY = 20;
 #if TARGET_OS_TV
     self.frame = CGRectMake(0, 0, 400, 400);
 #else
-    if (UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad) {
+    if ([UIDevice currentDevice].userInterfaceIdiom == UIUserInterfaceIdiomPad) {
         self.frame = CGRectMake(0, 0, 200, 200);
     } else {
         self.frame = CGRectMake(0, 0, 100, 100);
@@ -54,7 +54,8 @@ static const int LABEL_DY = 20;
     _hostLabel.textColor = [UIColor whiteColor];
     
     _hostOverlay = [[UIImageView alloc] initWithFrame:CGRectMake(self.frame.size.width / 3, _hostIcon.frame.size.height / 4, _hostIcon.frame.size.width / 3, self.frame.size.height / 3)];
-    _hostSpinner = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleWhiteLarge];
+    _hostSpinner = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleLarge];
+    _hostSpinner.color = [UIColor whiteColor];
     [_hostSpinner setFrame:_hostOverlay.frame];
     _hostSpinner.userInteractionEnabled = NO;
     _hostSpinner.hidesWhenStopped = YES;
@@ -67,7 +68,11 @@ static const int LABEL_DY = 20;
     _hostIcon.adjustsImageWhenAncestorFocused = YES;
     _hostIcon.masksFocusEffectToContents = YES;
     
+    // Deprecated in favor of UIButtonConfiguration, which we don't use
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
     self.adjustsImageWhenHighlighted = NO;
+#pragma clang diagnostic pop
     
     _hostOverlay.masksFocusEffectToContents = YES;
     _hostOverlay.adjustsImageWhenAncestorFocused = NO;

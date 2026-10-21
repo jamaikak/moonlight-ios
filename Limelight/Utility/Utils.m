@@ -11,9 +11,11 @@
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <netdb.h>
+#include <float.h>
 
 @implementation Utils
 NSString *const deviceName = @"roth";
+NSString *const matchDisplayScaleKey = @"matchDisplayScale";
 
 + (NSData*) randomBytes:(NSInteger)length {
     char* bytes = malloc(length);
@@ -162,6 +164,65 @@ NSString *const deviceName = @"roth";
     
     // Only reachable before any scene connects
     return windowScene != nil ? windowScene.screen : [UIScreen mainScreen];
+}
+
++ (UIWindow*) keyWindow {
+    UIWindowScene* bestScene = nil;
+    for (UIScene* scene in [UIApplication sharedApplication].connectedScenes) {
+        if (![scene isKindOfClass:[UIWindowScene class]] ||
+            ![scene.session.role isEqualToString:UIWindowSceneSessionRoleApplication]) {
+            continue;
+        }
+        
+        if (bestScene == nil || scene.activationState == UISceneActivationStateForegroundActive) {
+            bestScene = (UIWindowScene*)scene;
+        }
+    }
+    
+    return bestScene.keyWindow ?: bestScene.windows.firstObject;
+}
+
++ (CGSize) streamSizeForDisplaySize:(CGSize)displaySize scale:(double)scale {
+    double displayAspect = displaySize.width / displaySize.height;
+    double targetWidth = displaySize.width * scale;
+    
+    // Rounding both sides down to a multiple of 8 can leave visible bars, so
+    // try widths within 5% of the target, each with the two heights around
+    // the right one
+    int minWidth = MAX(8, (int)(targetWidth * 0.95) & ~7);
+    int maxWidth = MAX(minWidth, (int)(targetWidth * 1.05));
+    CGSize best = CGSizeMake(minWidth, MAX(8, (int)(minWidth / displayAspect) & ~7));
+    double bestBars = DBL_MAX;
+    double bestDistance = DBL_MAX;
+    for (int width = minWidth; width <= maxWidth; width += 8) {
+        int lowerHeight = MAX(8, (int)(width / displayAspect) & ~7);
+        for (int height = lowerHeight; height <= lowerHeight + 8; height += 8) {
+            // Pixels of the display left uncovered when the video is fit to it
+            double aspect = (double)width / height;
+            double bars = aspect < displayAspect ?
+                displaySize.width - displaySize.height * aspect :
+                displaySize.height - displaySize.width / aspect;
+            double distance = fabs(width - targetWidth);
+            
+            // Take the size closest to the target among those with bars
+            // under a pixel, or the one with the smallest bars if none are
+            BOOL better;
+            if (bars < 1 || bestBars < 1) {
+                better = bars < 1 && (bestBars >= 1 || distance < bestDistance);
+            }
+            else {
+                better = bars < bestBars;
+            }
+            
+            if (better) {
+                best = CGSizeMake(width, height);
+                bestBars = bars;
+                bestDistance = distance;
+            }
+        }
+    }
+    
+    return best;
 }
 
 @end
