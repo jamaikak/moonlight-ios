@@ -64,6 +64,7 @@
     UILabel *_touchpadLabel;
     UIButton *_keyboardButton;
     id _externalDisplayRegistration;
+    int _externalDisplayWaits;
 #endif
 }
 
@@ -143,13 +144,7 @@
     }
 #endif
     
-    // If an external display is already plugged in, start the stream there
-    // at the display's resolution instead of the one in settings
-    if ([self updateExternalDisplayExcluding:nil]) {
-        CGSize resolution = [self streamResolutionForCurrentDisplay];
-        self.streamConfig.width = (int)resolution.width;
-        self.streamConfig.height = (int)resolution.height;
-    }
+    [self updateExternalDisplayExcluding:nil];
 #endif
     
 #if TARGET_OS_TV
@@ -246,11 +241,39 @@
                                                object: nil];
 #endif
     
-    [self startStream];
+    [self startFirstStream];
     
     [self.view addSubview:_stageLabel];
     [self.view addSubview:_spinner];
     [self.view addSubview:_tipLabel];
+}
+
+// Starts the stream the first time, on an external display if one is connected
+- (void)startFirstStream
+{
+#if !TARGET_OS_TV
+    // An external display's scene connects a moment after we ask for it.
+    // Wait for it briefly rather than starting on our own screen and then
+    // restarting the stream to move it over.
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+    BOOL externalScreenPresent = [UIScreen screens].count > 1;
+#pragma clang diagnostic pop
+    if (_externalWindow == nil && externalScreenPresent && _externalDisplayWaits < 10) {
+        _externalDisplayWaits++;
+        [self performSelector:@selector(startFirstStream) withObject:nil afterDelay:0.1];
+        return;
+    }
+    
+    if (_externalWindow != nil) {
+        // Use the display's resolution instead of the one in settings
+        CGSize resolution = [self streamResolutionForCurrentDisplay];
+        self.streamConfig.width = (int)resolution.width;
+        self.streamConfig.height = (int)resolution.height;
+    }
+#endif
+    
+    [self startStream];
 }
 
 // Creates the stream view for the current stream configuration and starts
@@ -595,6 +618,7 @@
         [[NSNotificationCenter defaultCenter] removeObserver:self name:UISceneWillConnectNotification object:nil];
         [[NSNotificationCenter defaultCenter] removeObserver:self name:UISceneDidDisconnectNotification object:nil];
         [self removeExternalWindow];
+        [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(startFirstStream) object:nil];
 #if defined(__IPHONE_27_0)
         if (@available(iOS 27.0, *)) {
             if (_externalDisplayRegistration != nil) {
@@ -695,6 +719,7 @@
     _connectionActive = NO;
 #if !TARGET_OS_TV
     [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(restartStreamIfResolutionChanged) object:nil];
+    [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(startFirstStream) object:nil];
 #endif
     
     // Reset display mode back to default
