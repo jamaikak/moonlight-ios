@@ -13,6 +13,7 @@
 #import "ControllerSupport.h"
 #import "DataManager.h"
 #import "Utils.h"
+#import "AppDelegate.h"
 
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -62,6 +63,8 @@
     UIScreenEdgePanGestureRecognizer *_exitSwipeRecognizer;
     UILabel *_touchpadLabel;
     UIButton *_keyboardButton;
+    id _externalDisplayRegistration;
+    int _externalDisplayWaits;
 #endif
 }
 
@@ -122,21 +125,26 @@
 #if !TARGET_OS_TV
     [[NSNotificationCenter defaultCenter] addObserver:self
                                              selector:@selector(externalDisplaysChanged:)
-                                                 name:UIScreenDidConnectNotification
+                                                 name:UISceneWillConnectNotification
                                                object:nil];
     
     [[NSNotificationCenter defaultCenter] addObserver:self
                                              selector:@selector(externalDisplaysChanged:)
-                                                 name:UIScreenDidDisconnectNotification
+                                                 name:UISceneDidDisconnectNotification
                                                object:nil];
     
-    // If an external display is already plugged in, start the stream there
-    // at the display's resolution instead of the one in settings
-    if ([self updateExternalDisplayExcluding:nil]) {
-        CGSize resolution = [self streamResolutionForCurrentDisplay];
-        self.streamConfig.width = (int)resolution.width;
-        self.streamConfig.height = (int)resolution.height;
+#if defined(__IPHONE_27_0)
+    if (@available(iOS 27.0, *)) {
+        // Since iOS 27, external displays only get their own scene (instead
+        // of mirroring) while a view controller asks for one
+        UISceneConfiguration *configuration = [UISceneConfiguration configurationWithName:@"External Display"
+                                                                              sessionRole:UIWindowSceneSessionRoleExternalDisplayNonInteractive];
+        configuration.delegateClass = [ExternalDisplaySceneDelegate class];
+        _externalDisplayRegistration = [self registerSceneAccessory:[UISceneAccessory externalNonInteractiveSceneAccessoryWithConfiguration:configuration]];
     }
+#endif
+    
+    [self updateExternalDisplayExcluding:nil];
 #endif
     
 #if TARGET_OS_TV
@@ -185,6 +193,7 @@
     _tipLabel.textAlignment = NSTextAlignmentCenter;
     _tipLabel.center = CGPointMake(self.view.frame.size.width / 2, self.view.frame.size.height * 0.9);
     
+#if TARGET_OS_TV
     [[NSNotificationCenter defaultCenter] addObserver:self
                                              selector:@selector(applicationWillResignActive:)
                                                  name:UIApplicationWillResignActiveNotification
@@ -199,6 +208,24 @@
                                              selector: @selector(applicationDidEnterBackground:)
                                                  name: UIApplicationDidEnterBackgroundNotification
                                                object: nil];
+#else
+    // Follow our own scene rather than the whole app, which stays
+    // active while an external display scene is connected
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(sceneStateChanged:)
+                                                 name:UISceneWillDeactivateNotification
+                                               object:nil];
+    
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(sceneStateChanged:)
+                                                 name:UISceneDidActivateNotification
+                                               object:nil];
+    
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(sceneStateChanged:)
+                                                 name:UISceneDidEnterBackgroundNotification
+                                               object:nil];
+#endif
 
 #if 0
     // FIXME: This doesn't work reliably on iPad for some reason. Showing and hiding the keyboard
@@ -214,11 +241,36 @@
                                                object: nil];
 #endif
     
-    [self startStream];
+    [self startFirstStream];
     
     [self.view addSubview:_stageLabel];
     [self.view addSubview:_spinner];
     [self.view addSubview:_tipLabel];
+}
+
+// Starts the stream the first time, on an external display if one is connected
+- (void)startFirstStream
+{
+#if !TARGET_OS_TV
+    // An external display's scene connects a moment after we ask for it,
+    // and the display isn't listed anywhere until then. Wait briefly for it
+    // rather than starting on our own screen and then restarting the stream
+    // to move it over.
+    if (_externalWindow == nil && _externalDisplayRegistration != nil && _externalDisplayWaits < 3) {
+        _externalDisplayWaits++;
+        [self performSelector:@selector(startFirstStream) withObject:nil afterDelay:0.1];
+        return;
+    }
+    
+    if (_externalWindow != nil) {
+        // Use the display's resolution instead of the one in settings
+        CGSize resolution = [self streamResolutionForCurrentDisplay];
+        self.streamConfig.width = (int)resolution.width;
+        self.streamConfig.height = (int)resolution.height;
+    }
+#endif
+    
+    [self startStream];
 }
 
 // Creates the stream view for the current stream configuration and starts
@@ -308,7 +360,7 @@
     CGFloat scale;
     if (_externalWindow != nil) {
         displaySize = _externalWindow.bounds.size;
-        scale = _externalWindow.screen.scale;
+        scale = _externalWindow.windowScene.screen.scale;
     }
     else {
         displaySize = self.view.bounds.size;
@@ -404,63 +456,70 @@
     }];
 }
 
-- (void)externalDisplaysChanged:(NSNotification *)notification
+- (void)sceneStateChanged:(NSNotification *)notification
 {
-    // The disconnected screen may still be listed while this is delivered
-    UIScreen *goneScreen = [notification.name isEqualToString:UIScreenDidDisconnectNotification] ? notification.object : nil;
-    [self updateExternalDisplayExcluding:goneScreen];
-    [self scheduleResolutionCheck];
+    if (notification.object != self.view.window.windowScene) {
+        return;
+    }
+    
+    if ([notification.name isEqualToString:UISceneWillDeactivateNotification]) {
+        [self applicationWillResignActive:notification];
+    }
+    else if ([notification.name isEqualToString:UISceneDidActivateNotification]) {
+        [self applicationDidBecomeActive:notification];
+    }
+    else if ([notification.name isEqualToString:UISceneDidEnterBackgroundNotification]) {
+        [self applicationDidEnterBackground:notification];
+    }
 }
 
-// Finds a display other than the device's own, like one connected over USB-C
-- (UIScreen *)findExternalScreenExcluding:(UIScreen *)excludedScreen
+- (void)externalDisplaysChanged:(NSNotification *)notification
 {
-    UIScreen *deviceScreen = [[[UIApplication sharedApplication] delegate] window].screen;
+    // The disconnected scene may still be listed while this is delivered
+    UIScene *goneScene = [notification.name isEqualToString:UISceneDidDisconnectNotification] ? notification.object : nil;
     
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wdeprecated-declarations"
-    // We don't use scenes, so external displays are only listed here
-    for (UIScreen *screen in [UIScreen screens]) {
-        if (screen != deviceScreen && screen != [UIScreen mainScreen] && screen != excludedScreen) {
-            return screen;
+    // Let the scene finish connecting before we add our window to it
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [self updateExternalDisplayExcluding:goneScene];
+        [self scheduleResolutionCheck];
+    });
+}
+
+// Finds the scene for a display other than the device's own, like one
+// connected over USB-C or AirPlay
+- (UIWindowScene *)findExternalDisplaySceneExcluding:(UIScene *)excludedScene
+{
+    for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+        if (scene != excludedScene &&
+            [scene isKindOfClass:[UIWindowScene class]] &&
+            ![scene.session.role isEqualToString:UIWindowSceneSessionRoleApplication]) {
+            return (UIWindowScene *)scene;
         }
     }
-#pragma clang diagnostic pop
     
     return nil;
 }
 
 // Creates or removes our window on the external display to match what's
 // connected. Returns whether we have an external display to stream to.
-- (BOOL)updateExternalDisplayExcluding:(UIScreen *)excludedScreen
+- (BOOL)updateExternalDisplayExcluding:(UIScene *)excludedScene
 {
-    UIScreen *screen = [self findExternalScreenExcluding:excludedScreen];
-    if (_externalWindow != nil && _externalWindow.screen == screen) {
+    UIWindowScene *scene = [self findExternalDisplaySceneExcluding:excludedScene];
+    if (_externalWindow != nil && _externalWindow.windowScene == scene) {
         return YES;
     }
     
     [self removeExternalWindow];
-    if (screen == nil) {
+    if (scene == nil) {
         return NO;
     }
     
-    Log(LOG_I, @"Using external display: %dx%d", (int)screen.nativeBounds.size.width, (int)screen.nativeBounds.size.height);
+    Log(LOG_I, @"Using external display: %dx%d", (int)scene.screen.nativeBounds.size.width, (int)scene.screen.nativeBounds.size.height);
     
-    UIWindow *window = nil;
-    for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
-        if ([scene isKindOfClass:[UIWindowScene class]] && ((UIWindowScene *)scene).screen == screen) {
-            window = [[UIWindow alloc] initWithWindowScene:(UIWindowScene *)scene];
-            break;
-        }
-    }
-    if (window == nil) {
-        // Without a scene for the display, attach the window to it directly
-        window = [[UIWindow alloc] initWithFrame:screen.bounds];
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wdeprecated-declarations"
-        window.screen = screen;
-#pragma clang diagnostic pop
-    }
+    UIWindow *window = [[UIWindow alloc] initWithWindowScene:scene];
+    
+    // Cover the placeholder that ExternalDisplaySceneDelegate shows
+    window.windowLevel = UIWindowLevelNormal + 1;
     
     UIViewController *rootViewController = [[UIViewController alloc] init];
     rootViewController.view.backgroundColor = [UIColor blackColor];
@@ -553,9 +612,18 @@
     // Only cleanup when we're being destroyed
     if (parent == nil) {
 #if !TARGET_OS_TV
-        [[NSNotificationCenter defaultCenter] removeObserver:self name:UIScreenDidConnectNotification object:nil];
-        [[NSNotificationCenter defaultCenter] removeObserver:self name:UIScreenDidDisconnectNotification object:nil];
+        [[NSNotificationCenter defaultCenter] removeObserver:self name:UISceneWillConnectNotification object:nil];
+        [[NSNotificationCenter defaultCenter] removeObserver:self name:UISceneDidDisconnectNotification object:nil];
         [self removeExternalWindow];
+        [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(startFirstStream) object:nil];
+#if defined(__IPHONE_27_0)
+        if (@available(iOS 27.0, *)) {
+            if (_externalDisplayRegistration != nil) {
+                [self unregisterSceneAccessory:_externalDisplayRegistration];
+                _externalDisplayRegistration = nil;
+            }
+        }
+#endif
 #endif
         [_controllerSupport cleanup];
         [UIApplication sharedApplication].idleTimerDisabled = NO;
@@ -648,6 +716,7 @@
     _connectionActive = NO;
 #if !TARGET_OS_TV
     [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(restartStreamIfResolutionChanged) object:nil];
+    [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(startFirstStream) object:nil];
 #endif
     
     // Reset display mode back to default
@@ -694,7 +763,7 @@
 }
 
 // This fires when the home button is pressed
-- (void)applicationDidEnterBackground:(UIApplication *)application {
+- (void)applicationDidEnterBackground:(NSNotification *)notification {
     Log(LOG_I, @"Terminating stream immediately for backgrounding");
 
     if (_inactivityTimer != nil) {

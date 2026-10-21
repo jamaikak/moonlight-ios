@@ -23,3 +23,20 @@
 - (NSURL*) getStoreURL;
 
 @end
+
+#if !TARGET_OS_TV
+// Sets up our window on the device's own screen
+@interface SceneDelegate : UIResponder <UIWindowSceneDelegate>
+
+@property (strong, nonatomic) UIWindow *window;
+
+@end
+
+// Shows a placeholder on an external display while we aren't streaming.
+// StreamFrameViewController puts the stream above it during a stream.
+@interface ExternalDisplaySceneDelegate : UIResponder <UIWindowSceneDelegate>
+
+@property (strong, nonatomic) UIWindow *window;
+
+@end
+#endif
