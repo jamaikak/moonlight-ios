@@ -1396,7 +1396,22 @@ const int FrontViewPositionNone = 0xff;
     if (@available(iOS 14.0, *)) {
         [self setNeedsUpdateOfPrefersPointerLocked];
     }
+#if !TARGET_OS_TV
+    if (@available(iOS 16.0, *)) {
+        [self setNeedsUpdateOfSupportedInterfaceOrientations];
+    }
+#endif
 }
+
+#if !TARGET_OS_TV
+- (UIInterfaceOrientationMask)supportedInterfaceOrientations
+{
+    if (_primaryViewController != nil) {
+        return _primaryViewController.supportedInterfaceOrientations;
+    }
+    return [super supportedInterfaceOrientations];
+}
+#endif
 
 - (UIViewController*)childViewControllerForHomeIndicatorAutoHidden
 {

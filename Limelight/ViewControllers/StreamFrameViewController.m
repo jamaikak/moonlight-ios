@@ -364,6 +364,13 @@
     }
     else {
         displaySize = self.view.bounds.size;
+        
+        // We may still be in portrait from touchpad mode, but we'll be
+        // turned to landscape before video shows on our own screen
+        if ([UIDevice currentDevice].userInterfaceIdiom == UIUserInterfaceIdiomPhone && displaySize.height > displaySize.width) {
+            displaySize = CGSizeMake(displaySize.height, displaySize.width);
+        }
+        
         scale = self.traitCollection.displayScale;
         if (scale <= 0) {
             scale = [Utils screenForView:self.view].scale;
@@ -566,6 +573,12 @@
     
     _touchpadLabel.hidden = !_streamingToExternalDisplay;
     _keyboardButton.hidden = !_streamingToExternalDisplay;
+    
+    // Allow portrait only while we're a touchpad
+    if (@available(iOS 16.0, *)) {
+        [self setNeedsUpdateOfSupportedInterfaceOrientations];
+        [[self revealViewController] setNeedsUpdateOfSupportedInterfaceOrientations];
+    }
     [self.view bringSubviewToFront:_keyboardButton];
     [self layoutTouchpadControls];
 }
@@ -588,6 +601,10 @@
 {
     [super viewDidLayoutSubviews];
     [self layoutTouchpadControls];
+    if (_streamingToExternalDisplay) {
+        // We can rotate while we're a touchpad
+        [self layoutStatusViews];
+    }
 }
 
 - (void)keyboardButtonPressed:(UIButton *)sender
@@ -1123,6 +1140,15 @@
 
 - (BOOL)shouldAutorotate {
     return YES;
+}
+
+- (UIInterfaceOrientationMask)supportedInterfaceOrientations {
+    // The touchpad works in portrait too, but video on our own screen
+    // stays landscape on iPhone
+    if ([UIDevice currentDevice].userInterfaceIdiom == UIUserInterfaceIdiomPhone && !_streamingToExternalDisplay) {
+        return UIInterfaceOrientationMaskLandscape;
+    }
+    return UIInterfaceOrientationMaskAllButUpsideDown;
 }
 
 - (BOOL)prefersPointerLocked {
