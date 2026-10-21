@@ -146,6 +146,24 @@ NSString *const deviceName = @"roth";
     }
 }
 
++ (UIScreen*) screenForView:(UIView*)view {
+    UIWindowScene* windowScene = view.window.windowScene;
+    
+    if (windowScene == nil) {
+        for (UIScene* scene in [UIApplication sharedApplication].connectedScenes) {
+            if ([scene isKindOfClass:[UIWindowScene class]]) {
+                windowScene = (UIWindowScene*)scene;
+                if (scene.activationState == UISceneActivationStateForegroundActive) {
+                    break;
+                }
+            }
+        }
+    }
+    
+    // Only reachable before any scene connects
+    return windowScene != nil ? windowScene.screen : [UIScreen mainScreen];
+}
+
 @end
 
 @implementation NSString (NSStringWithTrim)

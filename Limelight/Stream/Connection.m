@@ -373,6 +373,11 @@ void ClSetControllerLED(uint16_t controllerNumber, uint8_t r, uint8_t g, uint8_t
 
 -(void) terminate
 {
+    [self terminateWithCompletion:nil];
+}
+
+-(void) terminateWithCompletion:(void (^)(void))completion
+{
     // Interrupt any action blocking LiStartConnection(). This is
     // thread-safe and done outside initLock on purpose, since we
     // won't be able to acquire it if LiStartConnection is in
@@ -386,6 +391,11 @@ void ClSetControllerLED(uint16_t controllerNumber, uint8_t r, uint8_t g, uint8_t
         [initLock lock];
         LiStopConnection();
         [initLock unlock];
+        
+        // The completion runs on the main thread once the connection is fully stopped
+        if (completion != nil) {
+            dispatch_async(dispatch_get_main_queue(), completion);
+        }
     });
 }
 

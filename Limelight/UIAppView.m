@@ -70,8 +70,8 @@ static UIImage* noImage;
 #else
     // Rasterizing the cell layer increases rendering performance by quite a bit
     // but we want it unrasterized for tvOS where it must be scaled.
+    // The rasterization scale is set in didMoveToWindow, once we know which screen we're on.
     self.layer.shouldRasterize = YES;
-    self.layer.rasterizationScale = [UIScreen mainScreen].scale;
     
     if (@available(iOS 13.4.1, *)) {
         // Allow the button style to change when moused over
@@ -83,6 +83,16 @@ static UIImage* noImage;
     
     return self;
 }
+
+#if !TARGET_OS_TV
+- (void)didMoveToWindow {
+    [super didMoveToWindow];
+    
+    if (self.window != nil) {
+        self.layer.rasterizationScale = self.window.windowScene.screen.scale;
+    }
+}
+#endif
 
 - (void)didMoveToSuperview {
     // Start our update loop when we are added to our cell
