@@ -20,7 +20,7 @@ extern int ff_isom_write_av1c(AVIOContext *pb, const uint8_t *buf, int size,
                               int write_seq_header);
 
 @implementation VideoDecoderRenderer {
-    StreamView* _view;
+    UIView* _view;
     id<ConnectionCallbacks> _callbacks;
     float _streamAspectRatio;
     
@@ -35,6 +35,9 @@ extern int ff_isom_write_av1c(AVIOContext *pb, const uint8_t *buf, int size,
     
     CADisplayLink* _displayLink;
     BOOL framePacing;
+    
+    // Set when we're drawing to an external display rather than the device's own screen
+    UIScreen* _externalScreen;
 }
 
 - (void)reinitializeDisplayLayer
@@ -77,7 +80,7 @@ extern int ff_isom_write_av1c(AVIOContext *pb, const uint8_t *buf, int size,
     }
 }
 
-- (id)initWithView:(StreamView*)view callbacks:(id<ConnectionCallbacks>)callbacks streamAspectRatio:(float)aspectRatio useFramePacing:(BOOL)useFramePacing
+- (id)initWithView:(UIView*)view callbacks:(id<ConnectionCallbacks>)callbacks streamAspectRatio:(float)aspectRatio useFramePacing:(BOOL)useFramePacing
 {
     self = [super init];
     
@@ -85,6 +88,11 @@ extern int ff_isom_write_av1c(AVIOContext *pb, const uint8_t *buf, int size,
     _callbacks = callbacks;
     _streamAspectRatio = aspectRatio;
     framePacing = useFramePacing;
+    
+    UIScreen* screen = view.window.screen;
+    if (screen != nil && screen != [[[UIApplication sharedApplication] delegate] window].screen) {
+        _externalScreen = screen;
+    }
     
     parameterSetBuffers = [[NSMutableArray alloc] init];
     
@@ -101,7 +109,13 @@ extern int ff_isom_write_av1c(AVIOContext *pb, const uint8_t *buf, int size,
 
 - (void)start
 {
-    _displayLink = [CADisplayLink displayLinkWithTarget:self selector:@selector(displayLinkCallback:)];
+    if (_externalScreen != nil) {
+        // Pace frames to the refresh rate of the display we're drawing to
+        _displayLink = [_externalScreen displayLinkWithTarget:self selector:@selector(displayLinkCallback:)];
+    }
+    else {
+        _displayLink = [CADisplayLink displayLinkWithTarget:self selector:@selector(displayLinkCallback:)];
+    }
     if (@available(iOS 15.0, tvOS 15.0, *)) {
         _displayLink.preferredFrameRateRange = CAFrameRateRangeMake(self->frameRate, self->frameRate, self->frameRate);
     }

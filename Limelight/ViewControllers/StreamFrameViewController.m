@@ -52,8 +52,16 @@
     BOOL _restartingStream;
     CGSize _streamViewSize;
     
+    // When an external display is connected, the video goes there and
+    // our own screen becomes a touchpad
+    UIWindow *_externalWindow;
+    UIView *_externalRenderView;
+    BOOL _streamingToExternalDisplay;
+    
 #if !TARGET_OS_TV
     UIScreenEdgePanGestureRecognizer *_exitSwipeRecognizer;
+    UILabel *_touchpadLabel;
+    UIButton *_keyboardButton;
 #endif
 }
 
@@ -111,6 +119,26 @@
     _controllerSupport = [[ControllerSupport alloc] initWithConfig:self.streamConfig delegate:self];
     _inactivityTimer = nil;
     
+#if !TARGET_OS_TV
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(externalDisplaysChanged:)
+                                                 name:UIScreenDidConnectNotification
+                                               object:nil];
+    
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(externalDisplaysChanged:)
+                                                 name:UIScreenDidDisconnectNotification
+                                               object:nil];
+    
+    // If an external display is already plugged in, start the stream there
+    // at the display's resolution instead of the one in settings
+    if ([self updateExternalDisplayExcluding:nil]) {
+        CGSize resolution = [self streamResolutionForCurrentDisplay];
+        self.streamConfig.width = (int)resolution.width;
+        self.streamConfig.height = (int)resolution.height;
+    }
+#endif
+    
 #if TARGET_OS_TV
     if (!_menuTapGestureRecognizer || !_menuDoubleTapGestureRecognizer || !_playPauseTapGestureRecognizer) {
         _menuTapGestureRecognizer = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(controllerPauseButtonPressed:)];
@@ -144,7 +172,12 @@
 #if TARGET_OS_TV
     [_tipLabel setText:@"Tip: Tap the Play/Pause button on the Apple TV Remote to disconnect from your PC"];
 #else
-    [_tipLabel setText:@"Tip: Swipe from the left edge to disconnect from your PC"];
+    if (_externalWindow != nil) {
+        [_tipLabel setText:@"Streaming to your external display. Swipe from the left edge to disconnect."];
+    }
+    else {
+        [_tipLabel setText:@"Tip: Swipe from the left edge to disconnect from your PC"];
+    }
 #endif
     
     [_tipLabel sizeToFit];
@@ -194,11 +227,28 @@
 - (void)startStream
 {
     _streamViewSize = self.view.bounds.size;
+    _streamingToExternalDisplay = _externalWindow != nil;
     _streamView = [[StreamView alloc] initWithFrame:self.view.bounds];
-    [_streamView setupStreamView:_controllerSupport interactionDelegate:self config:self.streamConfig];
+    [_streamView setupStreamView:_controllerSupport interactionDelegate:self config:self.streamConfig touchpadMode:_streamingToExternalDisplay];
     
+    UIView *renderView = _streamView;
+    
+    if (_streamingToExternalDisplay) {
+        // Our screen is only a touchpad, so it can follow our size freely
+        _streamView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+        _streamView.backgroundColor = [UIColor colorWithWhite:0.12 alpha:1.0];
+        [self.view insertSubview:_streamView atIndex:0];
+        
+        // The video is drawn on the external display
+        UIView *externalRootView = _externalWindow.rootViewController.view;
+        _externalRenderView = [[UIView alloc] initWithFrame:externalRootView.bounds];
+        _externalRenderView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+        _externalRenderView.backgroundColor = [UIColor blackColor];
+        [externalRootView addSubview:_externalRenderView];
+        renderView = _externalRenderView;
+    }
     // Only enable scroll and zoom in absolute touch mode
-    if (_settings.absoluteTouchMode) {
+    else if (_settings.absoluteTouchMode) {
         _scrollView = [[UIScrollView alloc] initWithFrame:self.view.bounds];
 #if !TARGET_OS_TV
         [_scrollView.panGestureRecognizer setMinimumNumberOfTouches:2];
@@ -217,8 +267,12 @@
         [self.view insertSubview:_streamView atIndex:0];
     }
     
+#if !TARGET_OS_TV
+    [self updateTouchpadControls];
+#endif
+    
     _streamMan = [[StreamManager alloc] initWithConfig:self.streamConfig
-                                            renderView:_streamView
+                                            renderView:renderView
                                    connectionCallbacks:self];
     NSOperationQueue* opQueue = [[NSOperationQueue alloc] init];
     [opQueue addOperation:_streamMan];
@@ -245,17 +299,27 @@
     [self performSelector:@selector(restartStreamIfResolutionChanged) withObject:nil afterDelay:0.5];
 }
 
-// Picks a stream resolution with the same aspect ratio as our view, using
-// no more pixels than the resolution chosen in settings.
-- (CGSize)streamResolutionForCurrentViewSize
+// Picks a stream resolution with the same aspect ratio as the display the
+// video is shown on (our view, or the external display), using no more
+// pixels than the resolution chosen in settings.
+- (CGSize)streamResolutionForCurrentDisplay
 {
-    CGFloat scale = self.traitCollection.displayScale;
-    if (scale <= 0) {
-        scale = [Utils screenForView:self.view].scale;
+    CGSize displaySize;
+    CGFloat scale;
+    if (_externalWindow != nil) {
+        displaySize = _externalWindow.bounds.size;
+        scale = _externalWindow.screen.scale;
+    }
+    else {
+        displaySize = self.view.bounds.size;
+        scale = self.traitCollection.displayScale;
+        if (scale <= 0) {
+            scale = [Utils screenForView:self.view].scale;
+        }
     }
     
-    double viewWidth = self.view.bounds.size.width * scale;
-    double viewHeight = self.view.bounds.size.height * scale;
+    double viewWidth = displaySize.width * scale;
+    double viewHeight = displaySize.height * scale;
     if (viewWidth <= 0 || viewHeight <= 0) {
         return CGSizeMake(self.streamConfig.width, self.streamConfig.height);
     }
@@ -276,19 +340,28 @@
         return;
     }
     
-    // Only react to real size changes, so a stream whose resolution doesn't
-    // match the display (as chosen in settings) is left alone until then
-    if (CGSizeEqualToSize(self.view.bounds.size, _streamViewSize)) {
-        return;
+    BOOL useExternalDisplay = _externalWindow != nil;
+    if (useExternalDisplay == _streamingToExternalDisplay) {
+        // While we're on an external display, our own screen is only a
+        // touchpad, so its size doesn't matter
+        if (useExternalDisplay) {
+            return;
+        }
+        
+        // Only react to real size changes, so a stream whose resolution doesn't
+        // match the display (as chosen in settings) is left alone until then
+        if (CGSizeEqualToSize(self.view.bounds.size, _streamViewSize)) {
+            return;
+        }
+        
+        Log(LOG_I, @"View size changed, restarting stream");
+    }
+    else {
+        Log(LOG_I, @"External display %s, restarting stream", useExternalDisplay ? "connected" : "disconnected");
     }
     
     // Restart even if the resolution comes out the same, because the stream
     // view and video layer were laid out for the old size
-    CGSize resolution = [self streamResolutionForCurrentViewSize];
-    
-    Log(LOG_I, @"View size changed, restarting stream at %dx%d (was %dx%d)",
-        (int)resolution.width, (int)resolution.height, self.streamConfig.width, self.streamConfig.height);
-    
     _connectionActive = NO;
     _restartingStream = YES;
     
@@ -296,7 +369,7 @@
     _statsUpdateTimer = nil;
     [_overlayView setHidden:YES];
     
-    [_stageLabel setText:@"Resizing stream..."];
+    [_stageLabel setText:useExternalDisplay != _streamingToExternalDisplay ? @"Switching displays..." : @"Resizing stream..."];
     [_stageLabel sizeToFit];
     _stageLabel.hidden = NO;
     [_spinner startAnimating];
@@ -310,8 +383,15 @@
         
         [self->_scrollView removeFromSuperview];
         [self->_streamView removeFromSuperview];
+        [self->_externalRenderView removeFromSuperview];
         self->_scrollView = nil;
         self->_streamView = nil;
+        self->_externalRenderView = nil;
+        
+        // Use whichever display we have now, in case it changed while we were stopping
+        CGSize resolution = [self streamResolutionForCurrentDisplay];
+        Log(LOG_I, @"Restarting stream at %dx%d (was %dx%d)",
+            (int)resolution.width, (int)resolution.height, self.streamConfig.width, self.streamConfig.height);
         
         self.streamConfig.width = (int)resolution.width;
         self.streamConfig.height = (int)resolution.height;
@@ -322,6 +402,138 @@
         self->_restartingStream = NO;
         [self startStream];
     }];
+}
+
+- (void)externalDisplaysChanged:(NSNotification *)notification
+{
+    // The disconnected screen may still be listed while this is delivered
+    UIScreen *goneScreen = [notification.name isEqualToString:UIScreenDidDisconnectNotification] ? notification.object : nil;
+    [self updateExternalDisplayExcluding:goneScreen];
+    [self scheduleResolutionCheck];
+}
+
+// Finds a display other than the device's own, like one connected over USB-C
+- (UIScreen *)findExternalScreenExcluding:(UIScreen *)excludedScreen
+{
+    UIScreen *deviceScreen = [[[UIApplication sharedApplication] delegate] window].screen;
+    
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+    // We don't use scenes, so external displays are only listed here
+    for (UIScreen *screen in [UIScreen screens]) {
+        if (screen != deviceScreen && screen != [UIScreen mainScreen] && screen != excludedScreen) {
+            return screen;
+        }
+    }
+#pragma clang diagnostic pop
+    
+    return nil;
+}
+
+// Creates or removes our window on the external display to match what's
+// connected. Returns whether we have an external display to stream to.
+- (BOOL)updateExternalDisplayExcluding:(UIScreen *)excludedScreen
+{
+    UIScreen *screen = [self findExternalScreenExcluding:excludedScreen];
+    if (_externalWindow != nil && _externalWindow.screen == screen) {
+        return YES;
+    }
+    
+    [self removeExternalWindow];
+    if (screen == nil) {
+        return NO;
+    }
+    
+    Log(LOG_I, @"Using external display: %dx%d", (int)screen.nativeBounds.size.width, (int)screen.nativeBounds.size.height);
+    
+    UIWindow *window = nil;
+    for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+        if ([scene isKindOfClass:[UIWindowScene class]] && ((UIWindowScene *)scene).screen == screen) {
+            window = [[UIWindow alloc] initWithWindowScene:(UIWindowScene *)scene];
+            break;
+        }
+    }
+    if (window == nil) {
+        // Without a scene for the display, attach the window to it directly
+        window = [[UIWindow alloc] initWithFrame:screen.bounds];
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+        window.screen = screen;
+#pragma clang diagnostic pop
+    }
+    
+    UIViewController *rootViewController = [[UIViewController alloc] init];
+    rootViewController.view.backgroundColor = [UIColor blackColor];
+    window.rootViewController = rootViewController;
+    window.backgroundColor = [UIColor blackColor];
+    
+    // Show the window without making it key, so keyboard input
+    // keeps going to the stream view on our own screen
+    window.hidden = NO;
+    
+    _externalWindow = window;
+    return YES;
+}
+
+- (void)removeExternalWindow
+{
+    // The video layer stays in this window until the stream restarts,
+    // but nothing will see it after the window is hidden
+    _externalWindow.hidden = YES;
+    _externalWindow = nil;
+}
+
+- (void)updateTouchpadControls
+{
+    if (_touchpadLabel == nil) {
+        _touchpadLabel = [[UILabel alloc] init];
+        [_touchpadLabel setUserInteractionEnabled:NO];
+        _touchpadLabel.text = @"Touchpad\n\nDrag to move the mouse, tap to click,\nhold to drag, two fingers to right-click or scroll.";
+        _touchpadLabel.numberOfLines = 0;
+        _touchpadLabel.font = [UIFont systemFontOfSize:15];
+        _touchpadLabel.textAlignment = NSTextAlignmentCenter;
+        _touchpadLabel.textColor = [UIColor colorWithWhite:1.0 alpha:0.35];
+        [self.view addSubview:_touchpadLabel];
+        
+        _keyboardButton = [UIButton buttonWithType:UIButtonTypeSystem];
+        [_keyboardButton setImage:[UIImage systemImageNamed:@"keyboard"] forState:UIControlStateNormal];
+        _keyboardButton.tintColor = [UIColor whiteColor];
+        _keyboardButton.backgroundColor = [UIColor colorWithWhite:0.3 alpha:1.0];
+        _keyboardButton.layer.cornerRadius = 28;
+        _keyboardButton.accessibilityLabel = @"Keyboard";
+        [_keyboardButton addTarget:self action:@selector(keyboardButtonPressed:) forControlEvents:UIControlEventTouchUpInside];
+        [self.view addSubview:_keyboardButton];
+    }
+    
+    _touchpadLabel.hidden = !_streamingToExternalDisplay;
+    _keyboardButton.hidden = !_streamingToExternalDisplay;
+    [self.view bringSubviewToFront:_keyboardButton];
+    [self layoutTouchpadControls];
+}
+
+- (void)layoutTouchpadControls
+{
+    CGRect bounds = self.view.bounds;
+    UIEdgeInsets safeArea = self.view.safeAreaInsets;
+    
+    [_touchpadLabel sizeToFit];
+    _touchpadLabel.center = CGPointMake(CGRectGetMidX(bounds), CGRectGetMidY(bounds));
+    
+    const CGFloat buttonSize = 56, margin = 16;
+    _keyboardButton.frame = CGRectMake(bounds.size.width - safeArea.right - margin - buttonSize,
+                                       bounds.size.height - safeArea.bottom - margin - buttonSize,
+                                       buttonSize, buttonSize);
+}
+
+- (void)viewDidLayoutSubviews
+{
+    [super viewDidLayoutSubviews];
+    [self layoutTouchpadControls];
+}
+
+- (void)keyboardButtonPressed:(UIButton *)sender
+{
+    [_streamView toggleKeyboard];
 }
 #endif
 
@@ -340,6 +552,11 @@
 - (void)willMoveToParentViewController:(UIViewController *)parent {
     // Only cleanup when we're being destroyed
     if (parent == nil) {
+#if !TARGET_OS_TV
+        [[NSNotificationCenter defaultCenter] removeObserver:self name:UIScreenDidConnectNotification object:nil];
+        [[NSNotificationCenter defaultCenter] removeObserver:self name:UIScreenDidDisconnectNotification object:nil];
+        [self removeExternalWindow];
+#endif
         [_controllerSupport cleanup];
         [UIApplication sharedApplication].idleTimerDisabled = NO;
         [_streamMan stopStream];
