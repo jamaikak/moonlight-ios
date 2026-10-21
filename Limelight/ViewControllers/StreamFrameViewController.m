@@ -13,6 +13,7 @@
 #import "ControllerSupport.h"
 #import "DataManager.h"
 #import "Utils.h"
+#import "AppDelegate.h"
 
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -62,6 +63,7 @@
     UIScreenEdgePanGestureRecognizer *_exitSwipeRecognizer;
     UILabel *_touchpadLabel;
     UIButton *_keyboardButton;
+    id _externalDisplayRegistration;
 #endif
 }
 
@@ -129,6 +131,17 @@
                                              selector:@selector(externalDisplaysChanged:)
                                                  name:UISceneDidDisconnectNotification
                                                object:nil];
+    
+#if defined(__IPHONE_27_0)
+    if (@available(iOS 27.0, *)) {
+        // Since iOS 27, external displays only get their own scene (instead
+        // of mirroring) while a view controller asks for one
+        UISceneConfiguration *configuration = [UISceneConfiguration configurationWithName:@"External Display"
+                                                                              sessionRole:UIWindowSceneSessionRoleExternalDisplayNonInteractive];
+        configuration.delegateClass = [ExternalDisplaySceneDelegate class];
+        _externalDisplayRegistration = [self registerSceneAccessory:[UISceneAccessory externalNonInteractiveSceneAccessoryWithConfiguration:configuration]];
+    }
+#endif
     
     // If an external display is already plugged in, start the stream there
     // at the display's resolution instead of the one in settings
@@ -582,6 +595,14 @@
         [[NSNotificationCenter defaultCenter] removeObserver:self name:UISceneWillConnectNotification object:nil];
         [[NSNotificationCenter defaultCenter] removeObserver:self name:UISceneDidDisconnectNotification object:nil];
         [self removeExternalWindow];
+#if defined(__IPHONE_27_0)
+        if (@available(iOS 27.0, *)) {
+            if (_externalDisplayRegistration != nil) {
+                [self unregisterSceneAccessory:_externalDisplayRegistration];
+                _externalDisplayRegistration = nil;
+            }
+        }
+#endif
 #endif
         [_controllerSupport cleanup];
         [UIApplication sharedApplication].idleTimerDisabled = NO;
