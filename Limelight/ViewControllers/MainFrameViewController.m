@@ -1410,6 +1410,15 @@ static NSMutableSet* hostList;
 - (BOOL)shouldAutorotate {
     return YES;
 }
+
+- (UIInterfaceOrientationMask)supportedInterfaceOrientations {
+    // On iPhone, only the touchpad screen of an external display stream
+    // works in portrait
+    if ([UIDevice currentDevice].userInterfaceIdiom == UIUserInterfaceIdiomPhone) {
+        return UIInterfaceOrientationMaskLandscape;
+    }
+    return [super supportedInterfaceOrientations];
+}
 #endif
 
 - (void) disableNavigation {
