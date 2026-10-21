@@ -27,8 +27,19 @@
 - (void) setupStreamView:(ControllerSupport*)controllerSupport
      interactionDelegate:(id<UserInteractionDelegate>)interactionDelegate
                   config:(StreamConfiguration*)streamConfig;
+
+// In touchpad mode the video is shown on another display, so this view is
+// only used for input. Touches always move the mouse like a laptop touchpad
+// and the on-screen controls are hidden.
+- (void) setupStreamView:(ControllerSupport*)controllerSupport
+     interactionDelegate:(id<UserInteractionDelegate>)interactionDelegate
+                  config:(StreamConfiguration*)streamConfig
+            touchpadMode:(BOOL)touchpadMode;
 - (void) showOnScreenControls;
 - (OnScreenControlsLevel) getCurrentOscState;
+
+// Shows or hides the software keyboard for typing into the stream
+- (void) toggleKeyboard;
 
 #if !TARGET_OS_TV
 - (void) updateCursorLocation:(CGPoint)location isMouse:(BOOL)isMouse;
