@@ -252,14 +252,11 @@
 - (void)startFirstStream
 {
 #if !TARGET_OS_TV
-    // An external display's scene connects a moment after we ask for it.
-    // Wait for it briefly rather than starting on our own screen and then
-    // restarting the stream to move it over.
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wdeprecated-declarations"
-    BOOL externalScreenPresent = [UIScreen screens].count > 1;
-#pragma clang diagnostic pop
-    if (_externalWindow == nil && externalScreenPresent && _externalDisplayWaits < 10) {
+    // An external display's scene connects a moment after we ask for it,
+    // and the display isn't listed anywhere until then. Wait briefly for it
+    // rather than starting on our own screen and then restarting the stream
+    // to move it over.
+    if (_externalWindow == nil && _externalDisplayRegistration != nil && _externalDisplayWaits < 3) {
         _externalDisplayWaits++;
         [self performSelector:@selector(startFirstStream) withObject:nil afterDelay:0.1];
         return;
