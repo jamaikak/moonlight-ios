@@ -111,6 +111,16 @@
     [_connection terminate];
 }
 
+- (void) stopStreamWithCompletion:(void (^)(void))completion
+{
+    if (_connection != nil) {
+        [_connection terminateWithCompletion:completion];
+    }
+    else if (completion != nil) {
+        dispatch_async(dispatch_get_main_queue(), completion);
+    }
+}
+
 - (BOOL) launchApp:(HttpManager*)hMan receiveSessionUrl:(NSString**)sessionUrl {
     HttpResponse* launchResp = [[HttpResponse alloc] init];
     [hMan executeRequestSynchronously:[HttpRequest requestForResponse:launchResp withUrlRequest:[hMan newLaunchOrResumeRequest:@"launch" config:_config]]];

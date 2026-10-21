@@ -615,8 +615,9 @@ static NSMutableSet* hostList;
     _streamConfig.frameRate = [streamSettings.framerate intValue];
     if (@available(iOS 10.3, *)) {
         // Don't stream more FPS than the display can show
-        if (_streamConfig.frameRate > [UIScreen mainScreen].maximumFramesPerSecond) {
-            _streamConfig.frameRate = (int)[UIScreen mainScreen].maximumFramesPerSecond;
+        UIScreen* screen = [Utils screenForView:self.view];
+        if (_streamConfig.frameRate > screen.maximumFramesPerSecond) {
+            _streamConfig.frameRate = (int)screen.maximumFramesPerSecond;
             Log(LOG_W, @"Clamping FPS to maximum refresh rate: %d", _streamConfig.frameRate);
         }
     }

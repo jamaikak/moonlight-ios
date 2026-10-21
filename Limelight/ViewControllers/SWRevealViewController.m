@@ -27,6 +27,7 @@
 #import <QuartzCore/QuartzCore.h>
 
 #import "SWRevealViewController.h"
+#import "Utils.h"
 
 
 #pragma mark - StatusBar Helper Function
@@ -690,7 +691,9 @@ const int FrontViewPositionNone = 0xff;
     
     // On iOS7 the applicationFrame does not return the whole screen. This is possibly a bug.
     // As a workaround we use the screen bounds, this still works on iOS6, any zero based frame would work anyway!
-    CGRect frame = [[UIScreen mainScreen] bounds];
+    // Get the screen from our window scene rather than [UIScreen mainScreen], which
+    // doesn't describe the active display on devices with more than one.
+    CGRect frame = [Utils screenForView:nil].bounds;
 
     // create a custom content view for the controller
     _contentView = [[SWRevealView alloc] initWithFrame:frame controller:self];

@@ -23,6 +23,7 @@
 
 -(id) initWithConfig:(StreamConfiguration*)streamConfig delegate:(id<ControllerSupportDelegate>)delegate;
 -(void) connectionEstablished;
+-(void) resetControllerArrivals;
 
 -(void) initAutoOnScreenControlMode:(OnScreenControls*)osc;
 -(void) cleanup;

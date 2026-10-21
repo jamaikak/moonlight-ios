@@ -32,6 +32,12 @@ FOUNDATION_EXPORT NSString *const deviceName;
 + (unsigned short) addressPortStringToPort:(NSString*)addressPort;
 + (NSString*) addressAndPortToAddressPortString:(NSString*)address port:(unsigned short)port;
 
+// Returns the screen showing the given view, from its window scene.
+// Falls back to the first foreground window scene if the view isn't
+// in a window yet. Use this instead of [UIScreen mainScreen], which
+// doesn't describe the active display on devices with more than one.
++ (UIScreen*) screenForView:(UIView*)view;
+
 #if !TARGET_OS_TV
 + (void) launchUrl:(NSString*)urlString;
 #endif

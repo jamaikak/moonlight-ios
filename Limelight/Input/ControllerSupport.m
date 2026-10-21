@@ -1231,6 +1231,15 @@ static const double MOUSE_SPEED_DIVISOR = 1.25;
     }
 }
 
+// Called before starting a new connection with the same controllers attached,
+// so connectionEstablished reports them to the new session
+-(void) resetControllerArrivals
+{
+    for (Controller* controller in [_controllers allValues]) {
+        controller.reportedArrival = NO;
+    }
+}
+
 -(void) cleanup
 {
     [[NSNotificationCenter defaultCenter] removeObserver:_controllerConnectObserver];

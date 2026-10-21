@@ -12,6 +12,7 @@
 #import "StreamManager.h"
 #import "ControllerSupport.h"
 #import "DataManager.h"
+#import "Utils.h"
 
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -47,6 +48,9 @@
     UIScrollView *_scrollView;
     BOOL _userIsInteracting;
     CGSize _keyboardSize;
+    BOOL _connectionActive;
+    BOOL _restartingStream;
+    CGSize _streamViewSize;
     
 #if !TARGET_OS_TV
     UIScreenEdgePanGestureRecognizer *_exitSwipeRecognizer;
@@ -107,9 +111,6 @@
     _controllerSupport = [[ControllerSupport alloc] initWithConfig:self.streamConfig delegate:self];
     _inactivityTimer = nil;
     
-    _streamView = [[StreamView alloc] initWithFrame:self.view.frame];
-    [_streamView setupStreamView:_controllerSupport interactionDelegate:self config:self.streamConfig];
-    
 #if TARGET_OS_TV
     if (!_menuTapGestureRecognizer || !_menuDoubleTapGestureRecognizer || !_playPauseTapGestureRecognizer) {
         _menuTapGestureRecognizer = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(controllerPauseButtonPressed:)];
@@ -151,12 +152,6 @@
     _tipLabel.textAlignment = NSTextAlignmentCenter;
     _tipLabel.center = CGPointMake(self.view.frame.size.width / 2, self.view.frame.size.height * 0.9);
     
-    _streamMan = [[StreamManager alloc] initWithConfig:self.streamConfig
-                                            renderView:_streamView
-                                   connectionCallbacks:self];
-    NSOperationQueue* opQueue = [[NSOperationQueue alloc] init];
-    [opQueue addOperation:_streamMan];
-    
     [[NSNotificationCenter defaultCenter] addObserver:self
                                              selector:@selector(applicationWillResignActive:)
                                                  name:UIApplicationWillResignActiveNotification
@@ -186,9 +181,25 @@
                                                object: nil];
 #endif
     
+    [self startStream];
+    
+    [self.view addSubview:_stageLabel];
+    [self.view addSubview:_spinner];
+    [self.view addSubview:_tipLabel];
+}
+
+// Creates the stream view for the current stream configuration and starts
+// streaming into it. This runs once on load and again when the stream is
+// restarted at a new resolution after the view changes size.
+- (void)startStream
+{
+    _streamViewSize = self.view.bounds.size;
+    _streamView = [[StreamView alloc] initWithFrame:self.view.bounds];
+    [_streamView setupStreamView:_controllerSupport interactionDelegate:self config:self.streamConfig];
+    
     // Only enable scroll and zoom in absolute touch mode
     if (_settings.absoluteTouchMode) {
-        _scrollView = [[UIScrollView alloc] initWithFrame:self.view.frame];
+        _scrollView = [[UIScrollView alloc] initWithFrame:self.view.bounds];
 #if !TARGET_OS_TV
         [_scrollView.panGestureRecognizer setMinimumNumberOfTouches:2];
 #endif
@@ -199,16 +210,127 @@
         
         // Add StreamView inside a UIScrollView for absolute mode
         [_scrollView addSubview:_streamView];
-        [self.view addSubview:_scrollView];
+        [self.view insertSubview:_scrollView atIndex:0];
     }
     else {
         // Add StreamView directly in relative mode
-        [self.view addSubview:_streamView];
+        [self.view insertSubview:_streamView atIndex:0];
     }
     
-    [self.view addSubview:_stageLabel];
-    [self.view addSubview:_spinner];
-    [self.view addSubview:_tipLabel];
+    _streamMan = [[StreamManager alloc] initWithConfig:self.streamConfig
+                                            renderView:_streamView
+                                   connectionCallbacks:self];
+    NSOperationQueue* opQueue = [[NSOperationQueue alloc] init];
+    [opQueue addOperation:_streamMan];
+}
+
+#if !TARGET_OS_TV
+- (void)viewWillTransitionToSize:(CGSize)size withTransitionCoordinator:(id<UIViewControllerTransitionCoordinator>)coordinator
+{
+    [super viewWillTransitionToSize:size withTransitionCoordinator:coordinator];
+    
+    // This fires when the device folds or unfolds, rotates, or our window is
+    // resized by multitasking. Wait for the transition to finish so our
+    // bounds reflect the new size.
+    [coordinator animateAlongsideTransition:nil completion:^(id<UIViewControllerTransitionCoordinatorContext> context) {
+        [self scheduleResolutionCheck];
+    }];
+}
+
+- (void)scheduleResolutionCheck
+{
+    // Window resizing can deliver several size changes in a row,
+    // so only act once things have settled.
+    [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(restartStreamIfResolutionChanged) object:nil];
+    [self performSelector:@selector(restartStreamIfResolutionChanged) withObject:nil afterDelay:0.5];
+}
+
+// Picks a stream resolution with the same aspect ratio as our view, using
+// no more pixels than the resolution chosen in settings.
+- (CGSize)streamResolutionForCurrentViewSize
+{
+    CGFloat scale = self.traitCollection.displayScale;
+    if (scale <= 0) {
+        scale = [Utils screenForView:self.view].scale;
+    }
+    
+    double viewWidth = self.view.bounds.size.width * scale;
+    double viewHeight = self.view.bounds.size.height * scale;
+    if (viewWidth <= 0 || viewHeight <= 0) {
+        return CGSizeMake(self.streamConfig.width, self.streamConfig.height);
+    }
+    
+    double maxPixels = [_settings.width doubleValue] * [_settings.height doubleValue];
+    double factor = MIN(1.0, sqrt(maxPixels / (viewWidth * viewHeight)));
+    
+    // Encoders want dimensions that are a multiple of 8
+    int width = MAX(8, (int)(viewWidth * factor) & ~7);
+    int height = MAX(8, (int)(viewHeight * factor) & ~7);
+    return CGSizeMake(width, height);
+}
+
+- (void)restartStreamIfResolutionChanged
+{
+    if (!_connectionActive || _restartingStream) {
+        // We'll check again once the current connection is up
+        return;
+    }
+    
+    // Only react to real size changes, so a stream whose resolution doesn't
+    // match the display (as chosen in settings) is left alone until then
+    if (CGSizeEqualToSize(self.view.bounds.size, _streamViewSize)) {
+        return;
+    }
+    
+    // Restart even if the resolution comes out the same, because the stream
+    // view and video layer were laid out for the old size
+    CGSize resolution = [self streamResolutionForCurrentViewSize];
+    
+    Log(LOG_I, @"View size changed, restarting stream at %dx%d (was %dx%d)",
+        (int)resolution.width, (int)resolution.height, self.streamConfig.width, self.streamConfig.height);
+    
+    _connectionActive = NO;
+    _restartingStream = YES;
+    
+    [_statsUpdateTimer invalidate];
+    _statsUpdateTimer = nil;
+    [_overlayView setHidden:YES];
+    
+    [_stageLabel setText:@"Resizing stream..."];
+    [_stageLabel sizeToFit];
+    _stageLabel.hidden = NO;
+    [_spinner startAnimating];
+    [self layoutStatusViews];
+    
+    [_streamMan stopStreamWithCompletion:^{
+        // Bail if the user left the stream while we were stopping
+        if (self.parentViewController == nil) {
+            return;
+        }
+        
+        [self->_scrollView removeFromSuperview];
+        [self->_streamView removeFromSuperview];
+        self->_scrollView = nil;
+        self->_streamView = nil;
+        
+        self.streamConfig.width = (int)resolution.width;
+        self.streamConfig.height = (int)resolution.height;
+        
+        // The new session needs to hear about our controllers again
+        [self->_controllerSupport resetControllerArrivals];
+        
+        self->_restartingStream = NO;
+        [self startStream];
+    }];
+}
+#endif
+
+- (void)layoutStatusViews
+{
+    CGSize size = self.view.bounds.size;
+    _stageLabel.center = CGPointMake(size.width / 2, size.height / 2);
+    _spinner.center = CGPointMake(size.width / 2, size.height / 2 - _stageLabel.frame.size.height - _spinner.frame.size.height);
+    _tipLabel.center = CGPointMake(size.width / 2, size.height * 0.9);
 }
 
 - (UIView *)viewForZoomingInScrollView:(UIScrollView *)scrollView {
@@ -306,6 +428,11 @@
 }
 
 - (void) returnToMainFrame {
+    _connectionActive = NO;
+#if !TARGET_OS_TV
+    [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(restartStreamIfResolutionChanged) object:nil];
+#endif
+    
     // Reset display mode back to default
     [self updatePreferredDisplayMode:NO];
     
@@ -370,6 +497,8 @@
 - (void) connectionStarted {
     Log(LOG_I, @"Connection started");
     dispatch_async(dispatch_get_main_queue(), ^{
+        self->_connectionActive = YES;
+        
         // Leave the spinner spinning until it's obscured by
         // the first frame of video.
         self->_stageLabel.hidden = YES;
@@ -378,6 +507,11 @@
         [self->_streamView showOnScreenControls];
         
         [self->_controllerSupport connectionEstablished];
+        
+#if !TARGET_OS_TV
+        // Catch a size change that happened while we were connecting
+        [self scheduleResolutionCheck];
+#endif
         
         if (self->_settings.statsOverlay) {
             self->_statsUpdateTimer = [NSTimer scheduledTimerWithTimeInterval:1.0f
@@ -396,6 +530,8 @@
     unsigned int portTestResults = LiTestClientConnectivity(CONN_TEST_SERVER, 443, portFlags);
     
     dispatch_async(dispatch_get_main_queue(), ^{
+        self->_connectionActive = NO;
+        
         // Allow the display to go to sleep now
         [UIApplication sharedApplication].idleTimerDisabled = NO;
         

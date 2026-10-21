@@ -15,6 +15,9 @@
 
 - (void) stopStream;
 
+// Calls completion on the main thread once the connection has fully stopped
+- (void) stopStreamWithCompletion:(void (^)(void))completion;
+
 - (NSString*) getStatsOverlayText;
 
 @end
