@@ -212,3 +212,61 @@ static NSString* DB_NAME = @"Limelight_iOS.sqlite";
 }
 
 @end
+
+#if !TARGET_OS_TV
+@implementation SceneDelegate
+
+- (void)scene:(UIScene *)scene willConnectToSession:(UISceneSession *)session options:(UISceneConnectionOptions *)connectionOptions {
+    AppDelegate* appDelegate = (AppDelegate*)[UIApplication sharedApplication].delegate;
+    
+    NSString* storyboardName = [UIDevice currentDevice].userInterfaceIdiom == UIUserInterfaceIdiomPad ? @"iPad" : @"iPhone";
+    UIStoryboard* storyboard = [UIStoryboard storyboardWithName:storyboardName bundle:nil];
+    
+    self.window = [[UIWindow alloc] initWithWindowScene:(UIWindowScene*)scene];
+    self.window.rootViewController = [storyboard instantiateInitialViewController];
+    
+    // The rest of the app finds our window through the app delegate
+    appDelegate.window = self.window;
+    
+    // With scenes, a launch from a Home Screen quick action arrives here
+    // instead of in the launch options
+    UIApplicationShortcutItem* shortcut = connectionOptions.shortcutItem;
+    if (shortcut != nil) {
+        appDelegate.pcUuidToLoad = (NSString*)[shortcut.userInfo objectForKey:@"UUID"];
+    }
+    
+    [self.window makeKeyAndVisible];
+}
+
+- (void)windowScene:(UIWindowScene *)windowScene performActionForShortcutItem:(UIApplicationShortcutItem *)shortcutItem completionHandler:(void (^)(BOOL))completionHandler {
+    AppDelegate* appDelegate = (AppDelegate*)[UIApplication sharedApplication].delegate;
+    appDelegate.pcUuidToLoad = (NSString*)[shortcutItem.userInfo objectForKey:@"UUID"];
+    appDelegate.shortcutCompletionHandler = completionHandler;
+}
+
+- (void)sceneDidEnterBackground:(UIScene *)scene {
+    [(AppDelegate*)[UIApplication sharedApplication].delegate saveContext];
+}
+
+@end
+
+@implementation ExternalDisplaySceneDelegate
+
+- (void)scene:(UIScene *)scene willConnectToSession:(UISceneSession *)session options:(UISceneConnectionOptions *)connectionOptions {
+    UIViewController* rootViewController = [[UIViewController alloc] init];
+    rootViewController.view.backgroundColor = [UIColor blackColor];
+    
+    UILabel* label = [[UILabel alloc] initWithFrame:rootViewController.view.bounds];
+    label.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    label.text = @"Start a stream in Moonlight to show it here";
+    label.textAlignment = NSTextAlignmentCenter;
+    label.textColor = [UIColor colorWithWhite:1.0 alpha:0.5];
+    [rootViewController.view addSubview:label];
+    
+    self.window = [[UIWindow alloc] initWithWindowScene:(UIWindowScene*)scene];
+    self.window.rootViewController = rootViewController;
+    self.window.hidden = NO;
+}
+
+@end
+#endif

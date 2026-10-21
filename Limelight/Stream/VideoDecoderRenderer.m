@@ -89,8 +89,8 @@ extern int ff_isom_write_av1c(AVIOContext *pb, const uint8_t *buf, int size,
     _streamAspectRatio = aspectRatio;
     framePacing = useFramePacing;
     
-    UIScreen* screen = view.window.screen;
-    if (screen != nil && screen != [[[UIApplication sharedApplication] delegate] window].screen) {
+    UIScreen* screen = view.window.windowScene.screen;
+    if (screen != nil && screen != [[[UIApplication sharedApplication] delegate] window].windowScene.screen) {
         _externalScreen = screen;
     }
     
