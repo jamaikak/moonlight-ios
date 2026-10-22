@@ -141,6 +141,15 @@ static NSMutableSet* hostList;
 }
 
 - (void)alreadyPaired {
+    // PairManager calls this from its own thread, but _selectedHost
+    // belongs to the main thread
+    if (![NSThread isMainThread]) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self alreadyPaired];
+        });
+        return;
+    }
+    
     BOOL usingCachedAppList = false;
     
     // Capture the host here because it can change once we
@@ -436,7 +445,7 @@ static NSMutableSet* hostList;
 }
 
 - (UIViewController*) activeViewController {
-    UIViewController *topController = [UIApplication sharedApplication].keyWindow.rootViewController;
+    UIViewController *topController = [Utils keyWindow].rootViewController;
 
     while (topController.presentedViewController) {
         topController = topController.presentedViewController;
@@ -896,10 +905,25 @@ static NSMutableSet* hostList;
 }
 
 - (void) showLoadingFrame:(void (^)(void))completion {
+    // Some callers are on background queues, but this is UI work
+    if (![NSThread isMainThread]) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self showLoadingFrame:completion];
+        });
+        return;
+    }
+    
     [_loadingFrame showLoadingFrame:completion];
 }
 
 - (void) hideLoadingFrame:(void (^)(void))completion {
+    if (![NSThread isMainThread]) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self hideLoadingFrame:completion];
+        });
+        return;
+    }
+    
     [self enableNavigation];
     [_loadingFrame dismissLoadingFrame:completion];
 }
@@ -1293,7 +1317,7 @@ static NSMutableSet* hostList;
     
     CGColorSpaceRef colorSpace = CGColorSpaceCreateDeviceRGB();
     CGContextRef imageContext =  CGBitmapContextCreate(NULL, width, height, 8, width * 4, colorSpace,
-                                                       kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Little);
+                                                       (CGBitmapInfo)kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Little);
     CGColorSpaceRelease(colorSpace);
 
     CGContextDrawImage(imageContext, CGRectMake(0, 0, width, height), cgImage);
@@ -1407,10 +1431,6 @@ static NSMutableSet* hostList;
 }
 
 #if !TARGET_OS_TV
-- (BOOL)shouldAutorotate {
-    return YES;
-}
-
 - (UIInterfaceOrientationMask)supportedInterfaceOrientations {
     // On iPhone, only the touchpad screen of an external display stream
     // works in portrait

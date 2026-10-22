@@ -359,14 +359,19 @@
             return;
         }
         
-        SecCertificateRef actualCert = SecTrustGetCertificateAtIndex(challenge.protectionSpace.serverTrust, 0);
-        if (actualCert == nil) {
+        CFArrayRef certChain = SecTrustCopyCertificateChain(challenge.protectionSpace.serverTrust);
+        if (certChain == NULL || CFArrayGetCount(certChain) < 1) {
+            if (certChain != NULL) {
+                CFRelease(certChain);
+            }
             Log(LOG_E, @"Server certificate parsing error");
             completionHandler(NSURLSessionAuthChallengePerformDefaultHandling, NULL);
             return;
         }
         
+        SecCertificateRef actualCert = (SecCertificateRef)CFArrayGetValueAtIndex(certChain, 0);
         CFDataRef actualCertData = SecCertificateCopyData(actualCert);
+        CFRelease(certChain);
         if (actualCertData == nil) {
             Log(LOG_E, @"Server certificate data parsing error");
             completionHandler(NSURLSessionAuthChallengePerformDefaultHandling, NULL);

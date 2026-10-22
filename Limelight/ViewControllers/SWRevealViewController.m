@@ -37,9 +37,9 @@
 static CGFloat statusBarAdjustment( UIView* view )
 {
     CGFloat adjustment = 0.0f;
-    UIApplication *app = [UIApplication sharedApplication];
-    CGRect viewFrame = [view convertRect:view.bounds toView:[app keyWindow]];
-    CGRect statusBarFrame = [app statusBarFrame];
+    UIWindow *window = view.window;
+    CGRect viewFrame = [view convertRect:view.bounds toView:window];
+    CGRect statusBarFrame = window.windowScene.statusBarManager.statusBarFrame;
     
     if ( CGRectIntersectsRect(viewFrame, statusBarFrame) )
         adjustment = fminf(statusBarFrame.size.width, statusBarFrame.size.height);
@@ -426,6 +426,12 @@ static CGFloat scaledValue( CGFloat v1, CGFloat min2, CGFloat max2, CGFloat min1
 }
 
 
+- (void)pauseInteractiveTransition
+{
+    // not supported
+}
+
+
 - (void)completeTransition:(BOOL)didComplete
 {
     _completion();
@@ -659,7 +665,7 @@ const int FrontViewPositionNone = 0xff;
 
 - (UIViewController *)childViewControllerForStatusBarStyle
 {
-    int positionDif =  _frontViewPosition - FrontViewPositionLeft;
+    NSInteger positionDif =  _frontViewPosition - FrontViewPositionLeft;
     
     UIViewController *controller = _frontViewController;
     if ( positionDif > 0 ) controller = _rearViewController;
@@ -1653,7 +1659,7 @@ const int FrontViewPositionNone = 0xff;
     
     if ( [controllerView isKindOfClass:[UIScrollView class]] )
     {
-        BOOL adjust = controller.automaticallyAdjustsScrollViewInsets;
+        BOOL adjust = ((UIScrollView *)controllerView).contentInsetAdjustmentBehavior != UIScrollViewContentInsetAdjustmentNever;
         
         if ( adjust )
         {
