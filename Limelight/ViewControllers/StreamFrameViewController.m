@@ -14,6 +14,7 @@
 #import "DataManager.h"
 #import "Utils.h"
 #import "AppDelegate.h"
+#import "LaptopKeyboardView.h"
 
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -65,6 +66,16 @@
     UIButton *_keyboardButton;
     id _externalDisplayRegistration;
     int _externalDisplayWaits;
+    
+    // Laptop mode: when a foldable is half open with the hinge across the
+    // screen, video goes above the hinge and a keyboard and touchpad below it
+    id _hingeInteraction;
+    BOOL _hingeKnown;
+    BOOL _hingePartiallyOpen;
+    BOOL _streamingInLaptopMode;
+    UIView *_laptopVideoView;
+    LaptopKeyboardView *_laptopKeyboard;
+    CGSize _laptopVideoSize;
 #endif
 }
 
@@ -146,6 +157,16 @@
 #endif
     
     [self updateExternalDisplayExcluding:nil];
+    
+#if defined(__IPHONE_27_1)
+    if (@available(iOS 27.1, *)) {
+        __weak StreamFrameViewController *weakSelf = self;
+        _hingeInteraction = [[UIHingeInteraction alloc] initWithUpdateHandler:^(UIHingeInteraction *interaction, UIHingeInteractionUpdate *update) {
+            [weakSelf hingeUpdated:update.hinge];
+        }];
+        [self.view addInteraction:_hingeInteraction];
+    }
+#endif
 #endif
     
 #if TARGET_OS_TV
@@ -257,7 +278,10 @@
     // and the display isn't listed anywhere until then. Wait briefly for it
     // rather than starting on our own screen and then restarting the stream
     // to move it over.
-    if (_externalWindow == nil && _externalDisplayRegistration != nil && _externalDisplayWaits < 3) {
+    // The hinge's state also arrives a moment after we're on screen.
+    BOOL waitingForDisplay = _externalWindow == nil && _externalDisplayRegistration != nil;
+    BOOL waitingForHinge = _hingeInteraction != nil && !_hingeKnown;
+    if ((waitingForDisplay || waitingForHinge) && _externalDisplayWaits < 3) {
         _externalDisplayWaits++;
         [self performSelector:@selector(startFirstStream) withObject:nil afterDelay:0.1];
         return;
@@ -266,7 +290,7 @@
     // Use the display's resolution instead of the one in settings when
     // streaming to an external display, or when settings ask to follow
     // our own display (which may have folded or unfolded since then)
-    if (_externalWindow != nil || [self matchDisplayScale] > 0) {
+    if (_externalWindow != nil || [self matchDisplayScale] > 0 || [self shouldUseLaptopMode]) {
         CGSize resolution = [self streamResolutionForCurrentDisplay];
         self.streamConfig.width = (int)resolution.width;
         self.streamConfig.height = (int)resolution.height;
@@ -283,8 +307,14 @@
 {
     _streamViewSize = self.view.bounds.size;
     _streamingToExternalDisplay = _externalWindow != nil;
+#if !TARGET_OS_TV
+    _streamingInLaptopMode = !_streamingToExternalDisplay && [self shouldUseLaptopMode];
+    BOOL touchpadMode = _streamingToExternalDisplay || _streamingInLaptopMode;
+#else
+    BOOL touchpadMode = NO;
+#endif
     _streamView = [[StreamView alloc] initWithFrame:self.view.bounds];
-    [_streamView setupStreamView:_controllerSupport interactionDelegate:self config:self.streamConfig touchpadMode:_streamingToExternalDisplay];
+    [_streamView setupStreamView:_controllerSupport interactionDelegate:self config:self.streamConfig touchpadMode:touchpadMode];
     
     UIView *renderView = _streamView;
     
@@ -302,6 +332,31 @@
         [externalRootView addSubview:_externalRenderView];
         renderView = _externalRenderView;
     }
+#if !TARGET_OS_TV
+    else if (_streamingInLaptopMode) {
+        // The stream view is only the touchpad below the keyboard
+        _streamView.backgroundColor = [UIColor colorWithWhite:0.14 alpha:1.0];
+        _streamView.layer.cornerRadius = 12;
+        _streamView.layer.cornerCurve = kCACornerCurveContinuous;
+        [self.view insertSubview:_streamView atIndex:0];
+        
+        // The video is drawn above the hinge
+        _laptopVideoView = [[UIView alloc] init];
+        _laptopVideoView.backgroundColor = [UIColor blackColor];
+        _laptopVideoView.userInteractionEnabled = NO;
+        [self.view insertSubview:_laptopVideoView atIndex:0];
+        renderView = _laptopVideoView;
+        
+        if (_laptopKeyboard == nil) {
+            _laptopKeyboard = [[LaptopKeyboardView alloc] init];
+        }
+        [self.view addSubview:_laptopKeyboard];
+        
+        // The video layer is sized to its view when the stream starts
+        [self layoutLaptopViews];
+        _laptopVideoSize = _laptopVideoView.bounds.size;
+    }
+#endif
     // Only enable scroll and zoom in absolute touch mode
     else if (_settings.absoluteTouchMode) {
         _scrollView = [[UIScrollView alloc] initWithFrame:self.view.bounds];
@@ -376,9 +431,14 @@
     else {
         displaySize = self.view.bounds.size;
         
+        if ([self shouldUseLaptopMode]) {
+            // Only the part above the hinge shows video
+            displaySize = [self laptopVideoFrame].size;
+        }
         // We may still be in portrait from touchpad mode, but we'll be
         // turned to landscape before video shows on our own screen
-        if ([UIDevice currentDevice].userInterfaceIdiom == UIUserInterfaceIdiomPhone && displaySize.height > displaySize.width) {
+        else if ([UIDevice currentDevice].userInterfaceIdiom == UIUserInterfaceIdiomPhone &&
+                 !_hingePartiallyOpen && displaySize.height > displaySize.width) {
             displaySize = CGSizeMake(displaySize.height, displaySize.width);
         }
         
@@ -396,6 +456,8 @@
     
     double factor = [self matchDisplayScale];
     if (_externalWindow != nil || factor <= 0) {
+        // This also keeps a fixed resolution's pixel count when only part
+        // of our screen shows video in laptop mode
         double maxPixels = [_settings.width doubleValue] * [_settings.height doubleValue];
         factor = MIN(1.0, sqrt(maxPixels / (viewWidth * viewHeight)));
     }
@@ -411,7 +473,14 @@
     }
     
     BOOL useExternalDisplay = _externalWindow != nil;
-    if (useExternalDisplay == _streamingToExternalDisplay) {
+    BOOL useLaptopMode = !useExternalDisplay && [self shouldUseLaptopMode];
+    if (useExternalDisplay != _streamingToExternalDisplay) {
+        Log(LOG_I, @"External display %s, restarting stream", useExternalDisplay ? "connected" : "disconnected");
+    }
+    else if (useLaptopMode != _streamingInLaptopMode) {
+        Log(LOG_I, @"%s laptop mode, restarting stream", useLaptopMode ? "Entering" : "Leaving");
+    }
+    else {
         // While we're on an external display, our own screen is only a
         // touchpad, so its size doesn't matter
         if (useExternalDisplay) {
@@ -420,14 +489,12 @@
         
         // Only react to real size changes, so a stream whose resolution doesn't
         // match the display (as chosen in settings) is left alone until then
-        if (CGSizeEqualToSize(self.view.bounds.size, _streamViewSize)) {
+        if (CGSizeEqualToSize(self.view.bounds.size, _streamViewSize) &&
+            (!useLaptopMode || CGSizeEqualToSize([self laptopVideoFrame].size, _laptopVideoSize))) {
             return;
         }
         
         Log(LOG_I, @"View size changed, restarting stream");
-    }
-    else {
-        Log(LOG_I, @"External display %s, restarting stream", useExternalDisplay ? "connected" : "disconnected");
     }
     
     // Restart even if the resolution comes out the same, because the stream
@@ -438,6 +505,8 @@
     [_statsUpdateTimer invalidate];
     _statsUpdateTimer = nil;
     [_overlayView setHidden:YES];
+    
+    [_laptopKeyboard releaseAllKeys];
     
     [_stageLabel setText:useExternalDisplay != _streamingToExternalDisplay ? @"Switching displays..." : @"Resizing stream..."];
     [_stageLabel sizeToFit];
@@ -454,6 +523,9 @@
         [self->_scrollView removeFromSuperview];
         [self->_streamView removeFromSuperview];
         [self->_externalRenderView removeFromSuperview];
+        [self->_laptopVideoView removeFromSuperview];
+        [self->_laptopKeyboard removeFromSuperview];
+        self->_laptopVideoView = nil;
         self->_scrollView = nil;
         self->_streamView = nil;
         self->_externalRenderView = nil;
@@ -582,16 +654,107 @@
         [self.view addSubview:_keyboardButton];
     }
     
-    _touchpadLabel.hidden = !_streamingToExternalDisplay;
+    _touchpadLabel.hidden = !_streamingToExternalDisplay && !_streamingInLaptopMode;
+    _touchpadLabel.text = _streamingInLaptopMode ?
+        @"Drag to move the mouse, tap to click,\nhold to drag, two fingers to right-click or scroll." :
+        @"Touchpad\n\nDrag to move the mouse, tap to click,\nhold to drag, two fingers to right-click or scroll.";
+    
+    // The keyboard is always shown in laptop mode
     _keyboardButton.hidden = !_streamingToExternalDisplay;
     
-    // Allow portrait only while we're a touchpad
+    [self updateSupportedOrientations];
+    [self.view bringSubviewToFront:_touchpadLabel];
+    [self.view bringSubviewToFront:_keyboardButton];
+    [self layoutTouchpadControls];
+}
+
+- (void)updateSupportedOrientations
+{
+    // Allow portrait only while we're a touchpad or might be in laptop mode
     if (@available(iOS 16.0, *)) {
         [self setNeedsUpdateOfSupportedInterfaceOrientations];
         [[self revealViewController] setNeedsUpdateOfSupportedInterfaceOrientations];
     }
-    [self.view bringSubviewToFront:_keyboardButton];
-    [self layoutTouchpadControls];
+}
+
+#if defined(__IPHONE_27_1)
+- (void)hingeUpdated:(UIHinge *)hinge API_AVAILABLE(ios(27.1))
+{
+    BOOL partiallyOpen = hinge != nil && hinge.status == UIHingeStatusPartiallyOpen;
+    _hingeKnown = YES;
+    if (partiallyOpen == _hingePartiallyOpen) {
+        return;
+    }
+    
+    Log(LOG_I, @"Hinge is %s (%.0f degrees)", partiallyOpen ? "partially open" : "not partially open", hinge.angle * 180 / M_PI);
+    _hingePartiallyOpen = partiallyOpen;
+    
+    // Let the user turn the device to portrait to type like on a laptop
+    [self updateSupportedOrientations];
+    [self scheduleResolutionCheck];
+}
+#endif
+
+// The hinge's frame in our view while it runs across the screen, which is
+// how the device sits when half open like a laptop. Returns CGRectNull otherwise.
+- (CGRect)horizontalHingeFrame
+{
+#if defined(__IPHONE_27_1)
+    if (@available(iOS 27.1, *)) {
+        for (UIViewReservedRegion *region in [self.view reservedRegionsOfKind:[UIViewReservedRegionKind divisionRegionKind]]) {
+            if (region.active && region.frame.size.width > region.frame.size.height) {
+                return region.frame;
+            }
+        }
+    }
+#endif
+    return CGRectNull;
+}
+
+- (BOOL)shouldUseLaptopMode
+{
+    return _externalWindow == nil && _hingePartiallyOpen && !CGRectIsNull([self horizontalHingeFrame]);
+}
+
+// Video goes above the hinge
+- (CGRect)laptopVideoFrame
+{
+    CGRect bounds = self.view.bounds;
+    CGRect hinge = [self horizontalHingeFrame];
+    if (CGRectIsNull(hinge)) {
+        return bounds;
+    }
+    
+    CGFloat top = self.view.safeAreaInsets.top;
+    return CGRectMake(0, top, bounds.size.width, MAX(0, CGRectGetMinY(hinge) - top));
+}
+
+// Below the hinge, the keyboard sits nearest the hinge with the touchpad
+// under it, like on a laptop
+- (void)layoutLaptopViews
+{
+    CGRect bounds = self.view.bounds;
+    CGRect hinge = [self horizontalHingeFrame];
+    if (CGRectIsNull(hinge)) {
+        // We're leaving laptop mode, and will restart the stream shortly
+        return;
+    }
+    
+    _laptopVideoView.frame = [self laptopVideoFrame];
+    
+    UIEdgeInsets safeArea = self.view.safeAreaInsets;
+    CGFloat lowerTop = CGRectGetMaxY(hinge);
+    CGFloat lowerHeight = MAX(0, bounds.size.height - safeArea.bottom - lowerTop);
+    
+    // Keys get about 5mm rows at most, and the touchpad gets the rest
+    CGFloat keyboardHeight = MIN(lowerHeight * 0.6, 5 * 50 + 30);
+    _laptopKeyboard.frame = CGRectMake(0, lowerTop, bounds.size.width, keyboardHeight);
+    
+    const CGFloat margin = 12;
+    _streamView.frame = CGRectMake(safeArea.left + margin,
+                                   lowerTop + keyboardHeight + margin / 2,
+                                   bounds.size.width - safeArea.left - safeArea.right - margin * 2,
+                                   MAX(0, lowerHeight - keyboardHeight - margin * 1.5));
 }
 
 - (void)layoutTouchpadControls
@@ -600,7 +763,12 @@
     UIEdgeInsets safeArea = self.view.safeAreaInsets;
     
     [_touchpadLabel sizeToFit];
-    _touchpadLabel.center = CGPointMake(CGRectGetMidX(bounds), CGRectGetMidY(bounds));
+    if (_streamingInLaptopMode) {
+        _touchpadLabel.center = CGPointMake(CGRectGetMidX(_streamView.frame), CGRectGetMidY(_streamView.frame));
+    }
+    else {
+        _touchpadLabel.center = CGPointMake(CGRectGetMidX(bounds), CGRectGetMidY(bounds));
+    }
     
     const CGFloat buttonSize = 56, margin = 16;
     _keyboardButton.frame = CGRectMake(bounds.size.width - safeArea.right - margin - buttonSize,
@@ -611,8 +779,16 @@
 - (void)viewDidLayoutSubviews
 {
     [super viewDidLayoutSubviews];
+    if (_streamingInLaptopMode) {
+        [self layoutLaptopViews];
+        
+        // The hinge has no notification of its own when it moves
+        if (!CGSizeEqualToSize([self laptopVideoFrame].size, _laptopVideoSize)) {
+            [self scheduleResolutionCheck];
+        }
+    }
     [self layoutTouchpadControls];
-    if (_streamingToExternalDisplay) {
+    if (_streamingToExternalDisplay || _streamingInLaptopMode) {
         // We can rotate while we're a touchpad
         [self layoutStatusViews];
     }
@@ -626,10 +802,17 @@
 
 - (void)layoutStatusViews
 {
-    CGSize size = self.view.bounds.size;
-    _stageLabel.center = CGPointMake(size.width / 2, size.height / 2);
-    _spinner.center = CGPointMake(size.width / 2, size.height / 2 - _stageLabel.frame.size.height - _spinner.frame.size.height);
-    _tipLabel.center = CGPointMake(size.width / 2, size.height * 0.9);
+    CGRect area = self.view.bounds;
+#if !TARGET_OS_TV
+    if (_streamingInLaptopMode) {
+        // Keep these over the video, not the keyboard
+        area = [self laptopVideoFrame];
+    }
+#endif
+    CGFloat midX = CGRectGetMidX(area), midY = CGRectGetMidY(area);
+    _stageLabel.center = CGPointMake(midX, midY);
+    _spinner.center = CGPointMake(midX, midY - _stageLabel.frame.size.height - _spinner.frame.size.height);
+    _tipLabel.center = CGPointMake(midX, CGRectGetMinY(area) + area.size.height * 0.9);
 }
 
 - (UIView *)viewForZoomingInScrollView:(UIScrollView *)scrollView {
@@ -743,6 +926,7 @@
 - (void) returnToMainFrame {
     _connectionActive = NO;
 #if !TARGET_OS_TV
+    [_laptopKeyboard releaseAllKeys];
     [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(restartStreamIfResolutionChanged) object:nil];
     [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(startFirstStream) object:nil];
 #endif
@@ -1151,8 +1335,9 @@
 
 - (UIInterfaceOrientationMask)supportedInterfaceOrientations {
     // The touchpad works in portrait too, but video on our own screen
-    // stays landscape on iPhone
-    if ([UIDevice currentDevice].userInterfaceIdiom == UIUserInterfaceIdiomPhone && !_streamingToExternalDisplay) {
+    // stays landscape on iPhone, unless it's half open for laptop mode
+    if ([UIDevice currentDevice].userInterfaceIdiom == UIUserInterfaceIdiomPhone &&
+        !_streamingToExternalDisplay && !_hingePartiallyOpen) {
         return UIInterfaceOrientationMaskLandscape;
     }
     return UIInterfaceOrientationMaskAllButUpsideDown;

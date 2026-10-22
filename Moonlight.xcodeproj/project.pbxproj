@@ -111,6 +111,7 @@
 		FB89462919F646E200339C8A /* mkcert.c in Sources */ = {isa = PBXBuildFile; fileRef = FB89460719F646E200339C8A /* mkcert.c */; };
 		FB89462A19F646E200339C8A /* ControllerSupport.m in Sources */ = {isa = PBXBuildFile; fileRef = FB89460B19F646E200339C8A /* ControllerSupport.m */; };
 		FB89462B19F646E200339C8A /* StreamView.m in Sources */ = {isa = PBXBuildFile; fileRef = FB89460D19F646E200339C8A /* StreamView.m */; };
+		A1D0F00327F0000100C0FFEE /* LaptopKeyboardView.m in Sources */ = {isa = PBXBuildFile; fileRef = A1D0F00227F0000100C0FFEE /* LaptopKeyboardView.m */; };
 		FB89462C19F646E200339C8A /* HttpManager.m in Sources */ = {isa = PBXBuildFile; fileRef = FB89461019F646E200339C8A /* HttpManager.m */; };
 		FB89462D19F646E200339C8A /* MDNSManager.m in Sources */ = {isa = PBXBuildFile; fileRef = FB89461219F646E200339C8A /* MDNSManager.m */; };
 		FB89462E19F646E200339C8A /* PairManager.m in Sources */ = {isa = PBXBuildFile; fileRef = FB89461419F646E200339C8A /* PairManager.m */; };
@@ -267,6 +268,8 @@
 		FB89460B19F646E200339C8A /* ControllerSupport.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = ControllerSupport.m; sourceTree = "<group>"; };
 		FB89460C19F646E200339C8A /* StreamView.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = StreamView.h; sourceTree = "<group>"; };
 		FB89460D19F646E200339C8A /* StreamView.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = StreamView.m; sourceTree = "<group>"; };
+		A1D0F00127F0000100C0FFEE /* LaptopKeyboardView.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = LaptopKeyboardView.h; sourceTree = "<group>"; };
+		A1D0F00227F0000100C0FFEE /* LaptopKeyboardView.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = LaptopKeyboardView.m; sourceTree = "<group>"; };
 		FB89460F19F646E200339C8A /* HttpManager.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = HttpManager.h; sourceTree = "<group>"; };
 		FB89461019F646E200339C8A /* HttpManager.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = HttpManager.m; sourceTree = "<group>"; };
 		FB89461119F646E200339C8A /* MDNSManager.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = MDNSManager.h; sourceTree = "<group>"; };
@@ -505,6 +508,8 @@
 				FB89460B19F646E200339C8A /* ControllerSupport.m */,
 				FB89460C19F646E200339C8A /* StreamView.h */,
 				FB89460D19F646E200339C8A /* StreamView.m */,
+				A1D0F00127F0000100C0FFEE /* LaptopKeyboardView.h */,
+				A1D0F00227F0000100C0FFEE /* LaptopKeyboardView.m */,
 				FB4678EB1A50C40900377732 /* OnScreenControls.h */,
 				FB4678EC1A50C40900377732 /* OnScreenControls.m */,
 				FB1A674B2131E65900507771 /* KeyboardSupport.h */,
@@ -909,6 +914,7 @@
 				FB89462C19F646E200339C8A /* HttpManager.m in Sources */,
 				FB89462D19F646E200339C8A /* MDNSManager.m in Sources */,
 				FB89462B19F646E200339C8A /* StreamView.m in Sources */,
+				A1D0F00327F0000100C0FFEE /* LaptopKeyboardView.m in Sources */,
 				FB4678FA1A55FFAD00377732 /* DiscoveryManager.m in Sources */,
 				98D5856D1C0EA79600F6CC00 /* TemporaryHost.m in Sources */,
 				FB89463519F646E200339C8A /* MainFrameViewController.m in Sources */,
