@@ -896,10 +896,25 @@ static NSMutableSet* hostList;
 }
 
 - (void) showLoadingFrame:(void (^)(void))completion {
+    // Some callers are on background queues, but this is UI work
+    if (![NSThread isMainThread]) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self showLoadingFrame:completion];
+        });
+        return;
+    }
+    
     [_loadingFrame showLoadingFrame:completion];
 }
 
 - (void) hideLoadingFrame:(void (^)(void))completion {
+    if (![NSThread isMainThread]) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self hideLoadingFrame:completion];
+        });
+        return;
+    }
+    
     [self enableNavigation];
     [_loadingFrame dismissLoadingFrame:completion];
 }
