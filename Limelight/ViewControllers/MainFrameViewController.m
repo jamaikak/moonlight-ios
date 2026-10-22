@@ -141,6 +141,15 @@ static NSMutableSet* hostList;
 }
 
 - (void)alreadyPaired {
+    // PairManager calls this from its own thread, but _selectedHost
+    // belongs to the main thread
+    if (![NSThread isMainThread]) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self alreadyPaired];
+        });
+        return;
+    }
+    
     BOOL usingCachedAppList = false;
     
     // Capture the host here because it can change once we
